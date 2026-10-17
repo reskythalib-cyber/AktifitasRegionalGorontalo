@@ -1,0 +1,3863 @@
+/**
+ * ============================================================================
+ * BACKEND LOGIC - AKTIVITAS REGIONAL GORONTALO (V13 - MASTER STAGED)
+ * ============================================================================
+ * 1. Sinkronisasi Data Sosialisasi ke Dashboard: Menggabungkan data Sosialisasi
+ *    secara langsung ke metrik dan tabel Dashboard sehingga highlight card SOS
+ *    Aman / Potensi Palsu sinkron 100%.
+ * 2. Zero-ID Safety Guard (isValidId_): Memblokir angka 0, 00, -, atau null
+ *    agar tidak dianggap sebagai ID valid, mencegah pengelompokan ribuan mitra
+ *    ber-ID 0 dan langsung beralih ke logika nama Fuzzy.
+ * 3. Cohort 7+ Latest WOB Record: Mengambil data riwayat kunjungan WOB terbaru
+ *    (berdasarkan tanggal/jam mutakhir) jika ada mitra yang dikunjungi berulang.
+ * 4. Impor Kolom Dinamis Renewal & Reactivation: Mendukung struktur header fleksibel
+ *    sesuai file Excel/CSV yang diimpor, disinkronkan silang terhadap Eligible & DO.
+ * 5. Mempertahankan 100% Seluruh Fitur Eksisting: Presensi Geofencing, Watermark WITA,
+ *    GPS Satelit Tracking 24 Jam, Autentikasi MPP & OTP Email, KP Daily & Post Disb.
+ */
+
+var CONFIG = {
+  TITLE: 'Aktivitas Regional Gorontalo',
+  TIMEZONE: 'Asia/Makassar',
+  CACHE_TTL: 300, // 5 Menit Caching
+  SHEETS: {
+    dashboard: { name: 'Hasil Inputan', label: 'Dashboard' },
+    kpiRM: { name: 'KPI RM', label: 'KPI RM' },
+    kpiAM: { name: 'KPI AM', label: 'KPI AM' },
+    kpiBM: { name: 'KPI BM', label: 'KPI BM' },
+    kpi: { name: 'KPI BP', label: 'KPI BP' },
+    pencapaianArea: { name: 'Pencapaian Area', label: 'Pencapaian Area' },
+    pencapaianPoint: { name: 'Pencapaian Point', label: 'Pencapaian Point' },
+    pencapaian: { name: 'Pencapaian BP', label: 'Pencapaian BP' },
+    approvalPerhari: { name: 'Aproval Perhari', label: 'KP Daily' },
+    pelayanan: { name: 'Pelayanan', label: 'Pelayanan' },
+    sosialisasi: { name: 'Sosialisasi', label: 'Sosialisasi' },
+    kunjunganWL: { name: 'Kunjungan WL', label: 'Kunjungan Eligible' },
+    kunjunganDO: { name: 'Kunjungan DO', label: 'Kunjungan DO' },
+    newPar: { name: 'Kunjungan New Par', label: 'Kunjungan New Par' },
+    dpd830: { name: 'Kunjungan Mitra DPD 8-30', label: 'Kunjungan Mitra DPD 8-30' },
+    dpd3160: { name: 'Kunjungan Mitra DPD 31-60', label: 'Kunjungan Mitra DPD 31-60' },
+    dpd6190: { name: 'Kunjungan Mitra DPD 61-90', label: 'Kunjungan Mitra DPD 61-90' },
+    wob: { name: 'Kunjungan WOB', label: 'Kunjungan WOB' },
+    validasi: { name: 'Validasi UK/Modal BM', label: 'Validasi UK/Modal BM' },
+    suprise: { name: 'Suprise Visit', label: 'Suprise Visit' },
+    absensi: { name: 'Absensi', label: 'Absensi Regional' },
+    GlobalChat: { name: 'GlobalChat', label: 'Global Chat' },
+    DataMPP: { name: 'Data MPP', label: 'Data MPP' },
+    Users: { name: 'Users', label: 'Users' },
+    postDisbLog: { name: 'Verifikasi_PostDisb', label: 'Verifikasi Post Disb' },
+    monitoringGD: { name: 'Monitoring GD', label: 'Monitoring GD' },
+    loanPaidPoint: { name: 'Loan Paid Point', label: 'Loan Paid Point' },
+    loanPaidArea: { name: 'Loan Paid Area', label: 'Loan Paid Area' },
+    loanPaidRegional: { name: 'Loan Paid Regional', label: 'Loan Paid Regional' },
+    cohort7: { name: 'Cohort DPD 7+ Disbursement', label: 'Cohort DPD 7+ Disbursement' },
+    renewal: { name: 'Renewal_Data', label: 'Bahan Kunjungan Renewal' },
+    reactivation: { name: 'Reactivation_Data', label: 'Bahan Kunjungan Reactivation' }
+  }
+};
+
+function doGet() {
+  try {
+    var template = HtmlService.createTemplateFromFile('index');
+    return template.evaluate()
+      .setTitle(CONFIG.TITLE)
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+  } catch (error) {
+    return HtmlService.createHtmlOutput('Error loading Web App: ' + error.message);
+  }
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/**
+ * ZETTBOT FEATURE 1: Zero-ID Safety Guard
+ * Menolak ID bernilai 0, 00, -, atau kosong agar tidak dianggap ID valid
+ */
+function isValidId_(idVal) {
+  if (idVal === null || idVal === undefined) return false;
+  var str = String(idVal).trim().replace(/['"`\s]/g, '');
+  if (!str || str === '-' || str === 'null' || str === 'undefined' || str === '0' || str === '00' || str === '000') return false;
+  var numericOnly = str.replace(/[^0-9]/g, '');
+  if (!numericOnly) return false;
+  var num = parseInt(numericOnly, 10);
+  return !isNaN(num) && num > 0;
+}
+
+/**
+ * ZETTBOT FEATURE 2: Normalized Numeric ID Normalizer
+ * Menormalisasi ID Loan & Customer Number anti-spasi dan anti-karakter non-digit
+ */
+function normalizeNumericId_(rawId) {
+  if (!isValidId_(rawId)) return '';
+  var cleanStr = String(rawId).trim().replace(/['"`\s]/g, '');
+  return cleanStr.replace(/[^0-9]/g, '');
+}
+
+function cleanGoogleDriveUrl_(url) {
+  if (!url || typeof url !== 'string') return '';
+  url = url.trim();
+  if (url === '-' || url === '') return '';
+
+  if (url.indexOf('lh3.googleusercontent.com/d/') !== -1) return url;
+
+  if (url.indexOf('drive.google.com') !== -1 || url.indexOf('docs.google.com') !== -1) {
+    var idMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]{20,})/) || 
+                  url.match(/id=([a-zA-Z0-9_-]{20,})/) || 
+                  url.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
+    if (idMatch && idMatch[1]) {
+      var lower = url.toLowerCase();
+      var isMedia = lower.indexOf('video') !== -1 || lower.indexOf('.mp4') !== -1 ||
+                    lower.indexOf('.webm') !== -1 || lower.indexOf('.mov') !== -1 ||
+                    lower.indexOf('.3gp') !== -1 || lower.indexOf('.mp3') !== -1 ||
+                    lower.indexOf('.wav') !== -1 || lower.indexOf('.m4a') !== -1;
+      if (isMedia) {
+        return 'https://drive.google.com/file/d/' + idMatch[1] + '/preview';
+      }
+      return 'https://lh3.googleusercontent.com/d/' + idMatch[1];
+    }
+  }
+
+  return url;
+}
+
+function parseDateAny_(str) {
+  if (!str) return null;
+  if (str instanceof Date) return isNaN(str.getTime()) ? null : str;
+  str = String(str).trim();
+  var datePart = str.split(' ')[0];
+
+  if (datePart.indexOf('/') !== -1) {
+    var p = datePart.split('/');
+    if (p.length === 3) {
+      var p0 = parseInt(p[0], 10);
+      var p1 = parseInt(p[1], 10);
+      var p2 = parseInt(p[2], 10);
+      var y, m, d;
+      if (p[0].length === 4) {
+        y = p0; m = p1 - 1; d = p2;
+      } else {
+        d = p0; m = p1 - 1; y = p2;
+        if (p1 > 12 && p0 <= 12) {
+          m = p0 - 1; d = p1;
+        }
+      }
+      var dt = new Date(y, m, d);
+      return isNaN(dt.getTime()) ? null : dt;
+    }
+  } else if (datePart.indexOf('-') !== -1) {
+    var p2 = datePart.split('-');
+    if (p2.length === 3) {
+      if (p2[0].length === 4) {
+        var dt2 = new Date(parseInt(p2[0], 10), parseInt(p2[1], 10) - 1, parseInt(p2[2], 10));
+        return isNaN(dt2.getTime()) ? null : dt2;
+      } else {
+        var dt3 = new Date(parseInt(p2[2], 10), parseInt(p2[1], 10) - 1, parseInt(p2[0], 10));
+        return isNaN(dt3.getTime()) ? null : dt3;
+      }
+    }
+  }
+
+  var parsed = new Date(str);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSameDay_(dateInput, targetDateObj) {
+  if (!dateInput || !targetDateObj) return false;
+  var d = parseDateAny_(dateInput);
+  if (!d || isNaN(d.getTime())) return false;
+  return d.getDate() === targetDateObj.getDate() &&
+         d.getMonth() === targetDateObj.getMonth() &&
+         d.getFullYear() === targetDateObj.getFullYear();
+}
+
+function getRowDateTimeMs_(row) {
+  if (!row) return 0;
+  var dStr = row.tanggal || row.disbursement_date || row.tanggal_approve_uk || row.waktu || row.submittedat || row.timestamp || row['_raw_12'] || row['_raw_0'] || '';
+  var tStr = row.waktu || row['_raw_13'] || row['_raw_1'] || '';
+  var dt = parseDateAny_(dStr);
+  var ms = dt ? dt.getTime() : 0;
+  if (tStr && String(tStr).indexOf(':') !== -1) {
+    var tp = String(tStr).split(':');
+    ms += (parseInt(tp[0], 10) || 0) * 3600000 + (parseInt(tp[1], 10) || 0) * 60000;
+  }
+  return ms;
+}
+
+function getSheetLastUpdated_(sheet, sheetKey, rawRows) {
+  try {
+    if (!sheet) return '';
+    var cache = CacheService.getScriptCache();
+    var cachedTime = cache.get('sheet_mod_' + sheetKey);
+    if (cachedTime) return cachedTime;
+
+    var latestDateFound = null;
+    if (rawRows && rawRows.length > 0) {
+      var scanCount = Math.min(rawRows.length, 120);
+      for (var i = 0; i < scanCount; i++) {
+        var r = rawRows[i];
+        var dateCandidates = [
+          r.tanggal_approve_uk, r.disbursement_date, r.tanggal,
+          r.waktu, r.submittedat, r.timestamp, r['_raw_0'], r['_raw_1']
+        ];
+        for (var c = 0; c < dateCandidates.length; c++) {
+          var val = dateCandidates[c];
+          if (val) {
+            var parsed = parseDateAny_(val);
+            if (parsed && !isNaN(parsed.getTime())) {
+              if (parsed.getFullYear() >= 2024 && parsed.getTime() <= (Date.now() + 86400000)) {
+                if (!latestDateFound || parsed.getTime() > latestDateFound.getTime()) {
+                  latestDateFound = parsed;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (latestDateFound) {
+      var res = Utilities.formatDate(latestDateFound, CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm') + ' WITA';
+      try { cache.put('sheet_mod_' + sheetKey, res, CONFIG.CACHE_TTL); } catch(e){}
+      return res;
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) {
+      var file = DriveApp.getFileById(ss.getId());
+      return Utilities.formatDate(file.getLastUpdated(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm') + ' WITA';
+    }
+  } catch(e) {
+    return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm') + ' WITA';
+  }
+  return Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm') + ' WITA';
+}
+
+function findHeaderIndexMap_(headerRow) {
+  var map = {};
+  if (!headerRow || !Array.isArray(headerRow)) return map;
+  for (var i = 0; i < headerRow.length; i++) {
+    var raw = String(headerRow[i] || '').trim().toLowerCase();
+    var clean = raw.replace(/[^a-z0-9]/g, '');
+    if (clean) map[clean] = i;
+  }
+  return map;
+}
+
+function loginUser(nik, password) {
+  try {
+    var nikStr = String(nik || '').trim();
+    var passStr = String(password || '').trim();
+    if (!nikStr || !passStr) return { status: 'error', message: 'NIK dan Password wajib diisi!' };
+
+    var sheetUsers = findSheet_('Users');
+    if (!sheetUsers) return { status: 'error', message: 'Sheet Users tidak ditemukan!' };
+
+    var data = sheetUsers.getDataRange().getDisplayValues();
+    var matchedUser = null;
+
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      if (String(row[0]).trim() === nikStr && String(row[4]).trim() === passStr) {
+        matchedUser = {
+          nik: row[0],
+          phone: row[1],
+          email: row[2],
+          role: row[3],
+          name: row[5],
+          point: row[6],
+          area: row[7],
+          geminiKey: row[9] || '',
+          photoUrl: cleanGoogleDriveUrl_(row[10] || ''),
+          regional: 'Gorontalo',
+          gender: '-',
+          masaKerja: '-',
+          statusKaryawan: '-',
+          posisi: row[3] || '-'
+        };
+        break;
+      }
+    }
+
+    if (!matchedUser) {
+      return { status: 'error', message: 'NIK atau Password tidak terdaftar!' };
+    }
+
+    // Ekstraksi Data MPP Dinamis Berbasis Header
+    var sheetMPP = findSheet_('Data MPP');
+    if (sheetMPP && sheetMPP.getLastRow() > 1) {
+      var mppValues = sheetMPP.getDataRange().getDisplayValues();
+      var hMap = findHeaderIndexMap_(mppValues[0]);
+
+      var idxNik = hMap['nik'] !== undefined ? hMap['nik'] : 3;
+      var idxReg = hMap['regional'] !== undefined ? hMap['regional'] : (hMap['region'] !== undefined ? hMap['region'] : 0);
+      var idxArea = hMap['area'] !== undefined ? hMap['area'] : 1;
+      var idxPoint = hMap['point'] !== undefined ? hMap['point'] : (hMap['cabang'] !== undefined ? hMap['cabang'] : 2);
+      var idxName = hMap['nama'] !== undefined ? hMap['nama'] : (hMap['namakaryawan'] !== undefined ? hMap['namakaryawan'] : 4);
+      var idxGender = hMap['gender'] !== undefined ? hMap['gender'] : (hMap['jeniskelamin'] !== undefined ? hMap['jeniskelamin'] : (hMap['jk'] !== undefined ? hMap['jk'] : 5));
+      var idxMasa = hMap['masakerja'] !== undefined ? hMap['masakerja'] : (hMap['masakerjakaryawan'] !== undefined ? hMap['masakerjakaryawan'] : 6);
+      var idxStatus = hMap['status'] !== undefined ? hMap['status'] : (hMap['statuskaryawan'] !== undefined ? hMap['statuskaryawan'] : 7);
+      var idxPosisi = hMap['posisi'] !== undefined ? hMap['posisi'] : (hMap['jabatan'] !== undefined ? hMap['jabatan'] : (hMap['tipe'] !== undefined ? hMap['tipe'] : 8));
+
+      for (var m = 1; m < mppValues.length; m++) {
+        var rNik = String(mppValues[m][idxNik] || '').trim();
+        if (rNik === nikStr) {
+          matchedUser.regional = mppValues[m][idxReg] || matchedUser.regional;
+          matchedUser.area = mppValues[m][idxArea] || matchedUser.area;
+          matchedUser.point = mppValues[m][idxPoint] || matchedUser.point;
+          matchedUser.name = mppValues[m][idxName] || matchedUser.name;
+          matchedUser.gender = mppValues[m][idxGender] || '-';
+          matchedUser.masaKerja = mppValues[m][idxMasa] || '-';
+          matchedUser.statusKaryawan = mppValues[m][idxStatus] || '-';
+          matchedUser.posisi = mppValues[m][idxPosisi] || matchedUser.role;
+          break;
+        }
+      }
+    }
+
+    updateHeartbeat(matchedUser);
+    return { status: 'success', user: matchedUser };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function registerUser(payload) {
+  try {
+    payload = payload || {};
+    var nik = String(payload.nik || '').trim();
+    var phone = String(payload.phone || '').trim();
+    var email = String(payload.email || '').trim().toLowerCase();
+    var role = String(payload.role || '').trim();
+    var pass = String(payload.password || '').trim();
+
+    if (!nik || !phone || !email || !role || !pass) {
+      return { status: 'error', message: 'Seluruh kolom pendaftaran akun wajib diisi lengkap!' };
+    }
+
+    var sheetMPP = findSheet_('Data MPP');
+    if (!sheetMPP || sheetMPP.getLastRow() < 2) {
+      return { status: 'error', message: 'Sheet Data MPP tidak ditemukan untuk verifikasi NIK!' };
+    }
+
+    var mppValues = sheetMPP.getDataRange().getDisplayValues();
+    var hMap = findHeaderIndexMap_(mppValues[0]);
+    var idxNik = hMap['nik'] !== undefined ? hMap['nik'] : 3;
+    var idxPosisi = hMap['posisi'] !== undefined ? hMap['posisi'] : (hMap['jabatan'] !== undefined ? hMap['jabatan'] : 8);
+    var idxName = hMap['nama'] !== undefined ? hMap['nama'] : (hMap['namakaryawan'] !== undefined ? hMap['namakaryawan'] : 4);
+    var idxPoint = hMap['point'] !== undefined ? hMap['point'] : (hMap['cabang'] !== undefined ? hMap['cabang'] : 2);
+    var idxArea = hMap['area'] !== undefined ? hMap['area'] : 1;
+
+    var matchedMpp = null;
+    for (var m = 1; m < mppValues.length; m++) {
+      var rNik = String(mppValues[m][idxNik] || '').trim();
+      if (rNik === nik) {
+        matchedMpp = {
+          nik: rNik,
+          posisi: String(mppValues[m][idxPosisi] || '').trim(),
+          name: String(mppValues[m][idxName] || '').trim(),
+          point: String(mppValues[m][idxPoint] || '').trim(),
+          area: String(mppValues[m][idxArea] || '').trim()
+        };
+        break;
+      }
+    }
+
+    if (!matchedMpp) {
+      return { 
+        status: 'error', 
+        message: 'Pendaftaran Ditolak: NIK ' + nik + ' tidak terdaftar dalam database Data MPP Regional Gorontalo!' 
+      };
+    }
+
+    var cleanRole = role.toLowerCase().replace(/[^a-z0-9]/g, '');
+    var cleanPosisi = matchedMpp.posisi.toLowerCase().replace(/[^a-z0-9]/g, '');
+    var isMatch = (cleanPosisi === cleanRole) || 
+                  (cleanPosisi.indexOf(cleanRole) !== -1) || 
+                  (cleanRole.indexOf(cleanPosisi) !== -1);
+
+    if (!isMatch) {
+      return {
+        status: 'error',
+        message: 'Pendaftaran Ditolak: Role ' + role + ' tidak sesuai dengan posisi Anda di Data MPP (' + matchedMpp.posisi + ')!'
+      };
+    }
+
+    var sheetUsers = findSheet_('Users');
+    if (!sheetUsers) return { status: 'error', message: 'Sheet Users tidak ditemukan!' };
+
+    var usersData = sheetUsers.getDataRange().getDisplayValues();
+    for (var u = 1; u < usersData.length; u++) {
+      if (String(usersData[u][0]).trim() === nik) {
+        return { 
+          status: 'error', 
+          message: 'NIK ' + nik + ' sudah terdaftar sebelumnya! Silakan login atau gunakan menu Lupa Password.' 
+        };
+      }
+    }
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var regDateStr = Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
+      sheetUsers.appendRow([
+        nik, phone, email, role, pass,
+        matchedMpp.name || ('User ' + nik),
+        matchedMpp.point || '-',
+        matchedMpp.area || '-',
+        regDateStr, '', ''
+      ]);
+      SpreadsheetApp.flush();
+      clearCacheKey_('bp_users_list');
+    } finally {
+      lock.releaseLock();
+    }
+
+    return {
+      status: 'success',
+      message: 'Pendaftaran Berhasil! Akun personil ' + matchedMpp.name + ' (' + role + ') telah terverifikasi dan aktif.'
+    };
+  } catch (err) {
+    return { status: 'error', message: 'Gagal melakukan pendaftaran akun: ' + err.toString() };
+  }
+}
+
+function maskEmail_(email) {
+  if (!email || email.indexOf('@') === -1) return email || '';
+  var parts = email.split('@');
+  var name = parts[0];
+  var domain = parts[1];
+  if (name.length <= 2) {
+    return name.charAt(0) + '*@' + domain;
+  }
+  return name.charAt(0) + '***' + name.charAt(name.length - 1) + '@' + domain;
+}
+
+function forgotPassword(nik, contact) {
+  try {
+    var nikStr = String(nik || '').trim();
+    var contactStr = String(contact || '').trim().toLowerCase();
+    if (!nikStr || !contactStr) {
+      return { status: 'error', message: 'NIK dan Email/Kontak terdaftar wajib diisi!' };
+    }
+
+    var sheetUsers = findSheet_('Users');
+    if (!sheetUsers || sheetUsers.getLastRow() < 2) {
+      return { status: 'error', message: 'Sheet Users tidak ditemukan!' };
+    }
+
+    var usersData = sheetUsers.getDataRange().getDisplayValues();
+    var matchedUser = null;
+
+    for (var i = 1; i < usersData.length; i++) {
+      var rNik = String(usersData[i][0] || '').trim();
+      var rPhone = String(usersData[i][1] || '').trim().replace(/[^0-9]/g, '');
+      var rEmail = String(usersData[i][2] || '').trim().toLowerCase();
+      var cleanContact = contactStr.replace(/[^0-9]/g, '');
+
+      if (rNik === nikStr) {
+        if (rEmail === contactStr || (cleanContact && rPhone && rPhone.indexOf(cleanContact) !== -1) || contactStr === rPhone) {
+          matchedUser = {
+            nik: rNik,
+            phone: usersData[i][1],
+            email: usersData[i][2],
+            name: usersData[i][5] || 'Karyawan',
+            role: usersData[i][3] || ''
+          };
+          break;
+        }
+      }
+    }
+
+    if (!matchedUser) {
+      return { status: 'error', message: 'Data NIK dan Email/Kontak tidak cocok dengan akun terdaftar di sistem Users!' };
+    }
+
+    if (!matchedUser.email || matchedUser.email.indexOf('@') === -1) {
+      return { status: 'error', message: 'Alamat email akun Anda tidak valid untuk pengiriman kode OTP!' };
+    }
+
+    var otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    var expiresMillis = Date.now() + (15 * 60 * 1000); // 15 menit
+    var nowStr = Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
+    var expStr = Utilities.formatDate(new Date(expiresMillis), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
+
+    var cache = CacheService.getScriptCache();
+    cache.put('otp_reset_' + nikStr, JSON.stringify({ otp: otpCode, expires: expiresMillis, email: matchedUser.email }), 900);
+
+    var sheetOtp = findSheet_('OTP_Sessions');
+    if (sheetOtp) {
+      sheetOtp.appendRow([
+        'OTP-' + Date.now(),
+        nikStr,
+        matchedUser.email,
+        otpCode,
+        nowStr,
+        expStr,
+        'Reset Password',
+        'Active'
+      ]);
+      SpreadsheetApp.flush();
+    }
+
+    var subject = 'Kode OTP Pemulihan Password - Regional Gorontalo';
+    var htmlBody = '<div style="font-family:Inter,Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;background:#ffffff;">' +
+      '<div style="text-align:center;margin-bottom:20px;">' +
+        '<div style="font-size:18px;font-weight:800;color:#101828;">AMARTHA REGIONAL GORONTALO</div>' +
+        '<div style="font-size:12px;color:#64748b;">Sistem Monitoring & Operasional Lapangan</div>' +
+      '</div>' +
+      '<div style="font-size:14px;color:#1e293b;margin-bottom:12px;">Halo <strong>' + matchedUser.name + '</strong>,</div>' +
+      '<div style="font-size:13px;color:#475569;line-height:1.5;margin-bottom:16px;">Kami menerima permintaan pemulihan kata sandi untuk akun NIK <strong>' + nikStr + '</strong>. Gunakan 6-digit kode OTP berikut:</div>' +
+      '<div style="text-align:center;margin:24px 0;background:#f0fdf4;border:2px dashed #16a34a;border-radius:10px;padding:16px;">' +
+        '<div style="font-size:32px;font-weight:900;letter-spacing:6px;color:#15803d;">' + otpCode + '</div>' +
+        '<div style="font-size:11px;color:#166534;margin-top:4px;">Berlaku selama 15 menit</div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:#64748b;line-height:1.4;">Jangan pernah memberikan kode OTP ini kepada siapapun demi keamanan akun Anda.</div>' +
+      '<div style="border-top:1px solid #f1f5f9;margin-top:24px;padding-top:12px;font-size:10px;color:#94a3b8;text-align:center;">&copy; ' + new Date().getFullYear() + ' Regional Gorontalo.</div>' +
+    '</div>';
+
+    MailApp.sendEmail({
+      to: matchedUser.email,
+      subject: subject,
+      htmlBody: htmlBody
+    });
+
+    return {
+      status: 'success',
+      message: 'Kode OTP 6-digit telah dikirimkan ke email terdaftar (' + maskEmail_(matchedUser.email) + '). Silakan cek kotak masuk atau folder spam Anda.',
+      emailMasked: maskEmail_(matchedUser.email),
+      nik: nikStr
+    };
+  } catch (err) {
+    return { status: 'error', message: 'Gagal mengirim email OTP: ' + err.toString() };
+  }
+}
+
+function verifyOtpAndResetPassword(payload) {
+  try {
+    payload = payload || {};
+    var nikStr = String(payload.nik || '').trim();
+    var otpStr = String(payload.otp || '').trim();
+    var newPass = String(payload.newPassword || '').trim();
+
+    if (!nikStr || !otpStr || !newPass) {
+      return { status: 'error', message: 'NIK, Kode OTP, dan Password baru wajib diisi!' };
+    }
+
+    var cache = CacheService.getScriptCache();
+    var cached = cache.get('otp_reset_' + nikStr);
+    var isValid = false;
+
+    if (cached) {
+      try {
+        var obj = JSON.parse(cached);
+        if (obj.otp === otpStr && Date.now() <= obj.expires) {
+          isValid = true;
+        }
+      } catch(e) {}
+    }
+
+    if (!isValid) {
+      var sheetOtp = findSheet_('OTP_Sessions');
+      if (sheetOtp && sheetOtp.getLastRow() > 1) {
+        var vals = sheetOtp.getDataRange().getDisplayValues();
+        for (var i = vals.length - 1; i >= 1; i--) {
+          if (String(vals[i][1]).trim() === nikStr && String(vals[i][3]).trim() === otpStr && vals[i][7] === 'Active') {
+            isValid = true;
+            sheetOtp.getRange(i + 1, 8).setValue('Used');
+            break;
+          }
+        }
+      }
+    }
+
+    if (!isValid) {
+      return { status: 'error', message: 'Kode OTP tidak valid atau sudah kedaluwarsa!' };
+    }
+
+    var sheetUsers = findSheet_('Users');
+    if (!sheetUsers || sheetUsers.getLastRow() < 2) {
+      return { status: 'error', message: 'Sheet Users tidak ditemukan!' };
+    }
+
+    var usersData = sheetUsers.getDataRange().getDisplayValues();
+    var updated = false;
+    for (var u = 1; u < usersData.length; u++) {
+      if (String(usersData[u][0]).trim() === nikStr) {
+        sheetUsers.getRange(u + 1, 5).setValue(newPass);
+        SpreadsheetApp.flush();
+        updated = true;
+        break;
+      }
+    }
+
+    if (!updated) {
+      return { status: 'error', message: 'NIK tidak ditemukan di database Users!' };
+    }
+
+    cache.remove('otp_reset_' + nikStr);
+    return { status: 'success', message: 'Kata sandi berhasil diatur ulang! Silakan login menggunakan kata sandi baru Anda.' };
+  } catch (err) {
+    return { status: 'error', message: 'Gagal mengatur ulang kata sandi: ' + err.toString() };
+  }
+}
+
+function requestOtpForProfileUpdate(userSession) {
+  try {
+    if (!userSession || !userSession.nik) {
+      return { status: 'error', message: 'Sesi login tidak valid!' };
+    }
+    var nikStr = String(userSession.nik).trim();
+    var sheetUsers = findSheet_('Users');
+    if (!sheetUsers) return { status: 'error', message: 'Sheet Users tidak ditemukan!' };
+
+    var usersData = sheetUsers.getDataRange().getDisplayValues();
+    var email = '';
+    var name = userSession.name || 'Karyawan';
+
+    for (var i = 1; i < usersData.length; i++) {
+      if (String(usersData[i][0]).trim() === nikStr) {
+        email = String(usersData[i][2] || '').trim();
+        break;
+      }
+    }
+
+    if (!email || email.indexOf('@') === -1) {
+      email = userSession.email || '';
+    }
+
+    if (!email || email.indexOf('@') === -1) {
+      return { status: 'error', message: 'Alamat email akun Anda tidak valid untuk menerima kode OTP!' };
+    }
+
+    var otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    var expiresMillis = Date.now() + (15 * 60 * 1000);
+
+    var cache = CacheService.getScriptCache();
+    cache.put('otp_profile_' + nikStr, JSON.stringify({ otp: otpCode, expires: expiresMillis, email: email }), 900);
+
+    var sheetOtp = findSheet_('OTP_Sessions');
+    if (sheetOtp) {
+      sheetOtp.appendRow([
+        'OTP-' + Date.now(),
+        nikStr,
+        email,
+        otpCode,
+        Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss'),
+        Utilities.formatDate(new Date(expiresMillis), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss'),
+        'Edit Profile',
+        'Active'
+      ]);
+      SpreadsheetApp.flush();
+    }
+
+    var subject = 'Kode OTP Konfirmasi Pembaruan Profil - Regional Gorontalo';
+    var htmlBody = '<div style="font-family:Inter,Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;background:#ffffff;">' +
+      '<div style="text-align:center;margin-bottom:20px;">' +
+        '<div style="font-size:18px;font-weight:800;color:#101828;">AMARTHA REGIONAL GORONTALO</div>' +
+        '<div style="font-size:12px;color:#64748b;">Konfirmasi Keamanan Akun</div>' +
+      '</div>' +
+      '<div style="font-size:14px;color:#1e293b;margin-bottom:12px;">Halo <strong>' + name + '</strong>,</div>' +
+      '<div style="font-size:13px;color:#475569;line-height:1.5;margin-bottom:16px;">Kami menerima permintaan perubahan data profil akun Anda (NIK: ' + nikStr + '). Masukkan kode OTP berikut:</div>' +
+      '<div style="text-align:center;margin:24px 0;background:#eff6ff;border:2px dashed #2563eb;border-radius:10px;padding:16px;">' +
+        '<div style="font-size:32px;font-weight:900;letter-spacing:6px;color:#1d4ed8;">' + otpCode + '</div>' +
+        '<div style="font-size:11px;color:#1e40af;margin-top:4px;">Berlaku selama 15 menit</div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:#64748b;line-height:1.4;">Jika Anda tidak merasa melakukan pembaruan profil ini, segera amankan akun Anda.</div>' +
+    '</div>';
+
+    MailApp.sendEmail({
+      to: email,
+      subject: subject,
+      htmlBody: htmlBody
+    });
+
+    return {
+      status: 'success',
+      message: 'Kode OTP konfirmasi telah dikirimkan ke email terdaftar (' + maskEmail_(email) + ').',
+      emailMasked: maskEmail_(email)
+    };
+  } catch (err) {
+    return { status: 'error', message: 'Gagal mengirim OTP profil: ' + err.toString() };
+  }
+}
+
+function updateUserProfile(payload, userSession) {
+  try {
+    if (!userSession || !userSession.nik) {
+      return { status: 'error', message: 'Sesi login tidak valid!' };
+    }
+    payload = payload || {};
+    var nikStr = String(userSession.nik).trim();
+    var oldPass = String(payload.oldPassword || '').trim();
+    var newPass = String(payload.newPassword || '').trim();
+    var phone = String(payload.phone || '').trim();
+    var email = String(payload.email || '').trim().toLowerCase();
+    var otp = String(payload.otp || '').trim();
+
+    var sheetUsers = findSheet_('Users');
+    if (!sheetUsers) return { status: 'error', message: 'Sheet Users tidak ditemukan!' };
+
+    var usersData = sheetUsers.getDataRange().getDisplayValues();
+    var rowIdx = -1;
+    var currentPass = '';
+    for (var i = 1; i < usersData.length; i++) {
+      if (String(usersData[i][0]).trim() === nikStr) {
+        rowIdx = i + 1;
+        currentPass = String(usersData[i][4] || '').trim();
+        break;
+      }
+    }
+
+    if (rowIdx === -1) {
+      return { status: 'error', message: 'User tidak ditemukan!' };
+    }
+
+    if (currentPass !== oldPass) {
+      return { status: 'error', message: 'Password saat ini yang Anda masukkan salah!' };
+    }
+
+    if (otp) {
+      var cache = CacheService.getScriptCache();
+      var cached = cache.get('otp_profile_' + nikStr);
+      var isOtpValid = false;
+      if (cached) {
+        try {
+          var oObj = JSON.parse(cached);
+          if (oObj.otp === otp && Date.now() <= oObj.expires) isOtpValid = true;
+        } catch(e) {}
+      }
+      if (!isOtpValid) {
+        return { status: 'error', message: 'Kode OTP tidak valid atau sudah kedaluwarsa!' };
+      }
+    }
+
+    if (phone) sheetUsers.getRange(rowIdx, 2).setValue(phone);
+    if (email) sheetUsers.getRange(rowIdx, 3).setValue(email);
+    if (newPass) sheetUsers.getRange(rowIdx, 5).setValue(newPass);
+
+    SpreadsheetApp.flush();
+    clearCacheKey_('bp_users_list');
+    return { status: 'success', message: 'Profil akun Anda berhasil diperbarui!' };
+  } catch (err) {
+    return { status: 'error', message: 'Gagal memperbarui profil: ' + err.toString() };
+  }
+}
+
+function getUserMppProfile(nik) {
+  try {
+    var nikStr = String(nik || '').trim();
+    if (!nikStr) return { status: 'error', message: 'NIK tidak valid!' };
+
+    var cache = CacheService.getScriptCache();
+    var cached = cache.get('mpp_profile_v15_' + nikStr);
+    if (cached) {
+      try { return { status: 'success', profile: JSON.parse(cached) }; } catch(e) {}
+    }
+
+    var sheetMPP = findSheet_('Data MPP');
+    if (!sheetMPP) return { status: 'error', message: 'Sheet Data MPP tidak ditemukan!' };
+
+    var mppData = sheetMPP.getDataRange().getDisplayValues();
+    var hMap = findHeaderIndexMap_(mppData[0]);
+
+    var idxNik = hMap['nik'] !== undefined ? hMap['nik'] : 3;
+    var idxReg = hMap['regional'] !== undefined ? hMap['regional'] : (hMap['region'] !== undefined ? hMap['region'] : 0);
+    var idxArea = hMap['area'] !== undefined ? hMap['area'] : 1;
+    var idxPoint = hMap['point'] !== undefined ? hMap['point'] : (hMap['cabang'] !== undefined ? hMap['cabang'] : 2);
+    var idxName = hMap['nama'] !== undefined ? hMap['nama'] : (hMap['namakaryawan'] !== undefined ? hMap['namakaryawan'] : 4);
+    var idxGender = hMap['gender'] !== undefined ? hMap['gender'] : (hMap['jeniskelamin'] !== undefined ? hMap['jeniskelamin'] : (hMap['jk'] !== undefined ? hMap['jk'] : 5));
+    var idxMasa = hMap['masakerja'] !== undefined ? hMap['masakerja'] : (hMap['masakerjakaryawan'] !== undefined ? hMap['masakerjakaryawan'] : 6);
+    var idxStatus = hMap['status'] !== undefined ? hMap['status'] : (hMap['statuskaryawan'] !== undefined ? hMap['statuskaryawan'] : 7);
+    var idxPosisi = hMap['posisi'] !== undefined ? hMap['posisi'] : (hMap['jabatan'] !== undefined ? hMap['jabatan'] : (hMap['tipe'] !== undefined ? hMap['tipe'] : 8));
+
+    var profile = null;
+    for (var i = 1; i < mppData.length; i++) {
+      if (String(mppData[i][idxNik] || '').trim() === nikStr) {
+        profile = {
+          regional: mppData[i][idxReg] || 'Gorontalo',
+          area: mppData[i][idxArea] || '-',
+          point: mppData[i][idxPoint] || '-',
+          nik: mppData[i][idxNik] || nikStr,
+          name: mppData[i][idxName] || '-',
+          gender: mppData[i][idxGender] || '-',
+          masaKerja: mppData[i][idxMasa] || '-',
+          statusKaryawan: mppData[i][idxStatus] || '-',
+          posisi: mppData[i][idxPosisi] || '-'
+        };
+        break;
+      }
+    }
+
+    var sheetUsers = findSheet_('Users');
+    var photoUrl = '';
+    if (sheetUsers && sheetUsers.getLastRow() > 1) {
+      var usersData = sheetUsers.getDataRange().getDisplayValues();
+      for (var u = 1; u < usersData.length; u++) {
+        if (String(usersData[u][0] || '').trim() === nikStr) {
+          photoUrl = cleanGoogleDriveUrl_(usersData[u][10] || '');
+          break;
+        }
+      }
+    }
+
+    if (profile) {
+      profile.photoUrl = photoUrl;
+      try { cache.put('mpp_profile_v15_' + nikStr, JSON.stringify(profile), 1800); } catch(e) {}
+      return { status: 'success', profile: profile };
+    }
+
+    return { status: 'error', message: 'Data personil tidak ditemukan di Data MPP!' };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function uploadFotoProfil(payload, userSession) {
+  try {
+    if (!userSession || !userSession.nik) {
+      return { status: 'error', message: 'Silakan login terlebih dahulu!' };
+    }
+
+    var base64Data = payload.photoBase64 || '';
+    if (!base64Data || base64Data.indexOf('base64,') === -1) {
+      return { status: 'error', message: 'Data gambar tidak valid!' };
+    }
+
+    var folderName = 'Foto Profil Karyawan Regional Gorontalo';
+    var folders = DriveApp.getFoldersByName(folderName);
+    var targetFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+    targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    var cleanBase64 = base64Data.split('base64,')[1];
+    var fileName = 'Profile_' + userSession.nik + '_' + Date.now() + '.jpg';
+    var blob = Utilities.newBlob(Utilities.base64Decode(cleanBase64), 'image/jpeg', fileName);
+    var file = targetFolder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    var fileId = file.getId();
+    var cdnPhotoUrl = 'https://lh3.googleusercontent.com/d/' + fileId;
+
+    var usersSheet = findSheet_('Users');
+    if (usersSheet) {
+      var data = usersSheet.getDataRange().getDisplayValues();
+      for (var i = 1; i < data.length; i++) {
+        if (String(data[i][0]).trim() === String(userSession.nik).trim()) {
+          usersSheet.getRange(i + 1, 11).setValue(cdnPhotoUrl);
+          SpreadsheetApp.flush();
+          break;
+        }
+      }
+    }
+
+    clearCacheKey_('bp_users_list');
+    return { 
+      status: 'success', 
+      photoUrl: cdnPhotoUrl, 
+      message: 'Foto profil berhasil disimpan dan diperbarui!' 
+    };
+  } catch (err) {
+    return { status: 'error', message: 'Gagal mengunggah foto profil: ' + err.toString() };
+  }
+}
+
+function calculateNameSimilarity_(str1, str2) {
+  var s1 = String(str1 || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+  var s2 = String(str2 || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 1.0;
+
+  var longer = s1.length > s2.length ? s1 : s2;
+  var shorter = s1.length > s2.length ? s2 : s1;
+  var longerLength = longer.length;
+  if (longerLength === 0) return 1.0;
+
+  var costs = [];
+  for (var i = 0; i <= longer.length; i++) {
+    var lastValue = i;
+    for (var j = 0; j <= shorter.length; j++) {
+      if (i === 0) costs[j] = j;
+      else {
+        if (j > 0) {
+          var newValue = costs[j - 1];
+          if (longer.charAt(i - 1) !== shorter.charAt(j - 1)) {
+            newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+          }
+          costs[j - 1] = lastValue;
+          lastValue = newValue;
+        }
+      }
+    }
+    if (i > 0) costs[shorter.length] = lastValue;
+  }
+
+  return (longerLength - costs[shorter.length]) / parseFloat(longerLength);
+}
+
+function getData(sheetKey, userSession) {
+  try {
+    var isGuest = (!userSession || !userSession.nik);
+    if (isGuest && sheetKey !== 'dashboard') {
+      return { isGuest: true, rows: [], headers: [], lastUpdate: '' };
+    }
+
+    var role = userSession ? String(userSession.role || '').trim() : '';
+    var userNik = userSession ? String(userSession.nik || '').trim() : '';
+    var userName = userSession ? String(userSession.name || '').trim().toLowerCase() : '';
+    var userPoint = userSession ? String(userSession.point || '').trim().toLowerCase() : '';
+    var userArea = userSession ? String(userSession.area || '').trim().toLowerCase() : '';
+    var isBpRole = (role === '4-BP' || role === '5-BPR' || role === '6-BP Buffer');
+
+    // RBAC Security Checks
+    if (sheetKey === 'kpiRM' && role !== '1-RM' && role !== 'Editor' && role !== 'Admin') {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+    if (sheetKey === 'kpiAM' && role !== '1-RM' && role !== '2-AM' && role !== 'Editor' && role !== 'Admin') {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+    if (sheetKey === 'kpiBM' && role !== '1-RM' && role !== '2-AM' && role !== '3-BM' && role !== 'Editor' && role !== 'Admin') {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+    if (role === '3-BM' && sheetKey === 'pencapaianArea') {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+    if (isBpRole && (sheetKey === 'pencapaianArea' || sheetKey === 'pencapaianPoint' || sheetKey === 'suprise' || sheetKey === 'validasi')) {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+    if (isBpRole && (sheetKey === 'loanPaidPoint' || sheetKey === 'loanPaidArea' || sheetKey === 'loanPaidRegional')) {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+    if (role === '3-BM' && (sheetKey === 'loanPaidArea' || sheetKey === 'loanPaidRegional')) {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+    if (role === '2-AM' && sheetKey === 'loanPaidRegional') {
+      return { isGuest: false, rows: [], headers: [], restricted: true };
+    }
+
+    var rawResult = getRawDataWithHeaders_(sheetKey);
+    var rawRows = rawResult.rows || [];
+    var headers = rawResult.headers || [];
+
+    var lastUpdateStr = '';
+    var activeSheetsForUpdate = [
+      'pencapaianArea', 'pencapaianPoint', 'pencapaian', 'approvalPerhari',
+      'sosialisasi', 'dashboard', 'kpiRM', 'kpiAM', 'kpiBM', 'kpi',
+      'monitoringGD', 'loanPaidPoint', 'loanPaidArea', 'loanPaidRegional',
+      'cohort7', 'renewal', 'reactivation'
+    ];
+    if (activeSheetsForUpdate.indexOf(sheetKey) !== -1) {
+      var targetSheetObj = CONFIG.SHEETS[sheetKey] ? findSheet_(CONFIG.SHEETS[sheetKey].name) : findSheet_(sheetKey);
+      lastUpdateStr = getSheetLastUpdated_(targetSheetObj, sheetKey, rawRows);
+    }
+
+    var gdMetrics = null;
+    var dashboardMetrics = null;
+
+    if (sheetKey === 'dashboard') {
+      var sosResult = getRawDataWithHeaders_('sosialisasi');
+      var sosRows = sosResult.rows || [];
+      var sosTotal = 0, sosAman = 0, sosPotensiPalsu = 0;
+      var sosMappedRows = [];
+
+      sosRows.forEach(function(s, idx) {
+        var sArea = String(s.area || s['_raw_4'] || s['_raw_10'] || '').trim();
+        var sPoint = String(s.point || s['_raw_3'] || '').trim();
+        var sNik = String(s.nik || s.nikbp || s['_raw_1'] || '').trim();
+        var sBp = String(s.bpbm || s.namabp || s.bp || s.nama || s['_raw_2'] || '').trim();
+
+        // RBAC Filter untuk Baris Sosialisasi
+        if (role === '2-AM' && userArea && sArea.toLowerCase() !== userArea) return;
+        if (role === '3-BM' && userPoint && sPoint.toLowerCase() !== userPoint) return;
+        if (isBpRole) {
+          if (userNik && sNik && sNik !== userNik) return;
+          if (userName && sBp && calculateNameSimilarity_(sBp, userName) < 0.90) return;
+        }
+
+        var ket = String(s.keterangan || s.proses || s['_raw_12'] || s['_raw_7'] || '').trim().toLowerCase();
+        var isPalsu = (ket.indexOf('palsu') !== -1 || ket.indexOf('potensi palsu') !== -1 || ket.indexOf('potensi') !== -1);
+
+        sosTotal++;
+        if (isPalsu) sosPotensiPalsu++; else sosAman++;
+
+        // Petakan ke skema feed Dashboard agar muncul di tabel aktivitas & semua grafik
+        var dRow = {
+          submissionid: 'SOS-' + (s['_raw_0'] || (idx + 1)),
+          bpbm: sBp,
+          point: sPoint,
+          area: sArea,
+          regional: s.regional || s['_raw_11'] || 'Gorontalo',
+          aktivitas: 'Sosialisasi Calon Mitra',
+          idloan: '-',
+          namamitra: String(s.namacalonmitra || s.namacalon_mitra || s.nama_calon_mitra || s['_raw_5'] || '-').trim(),
+          majelis: String(s.proses || s['_raw_8'] || '-').trim(),
+          hasilvisit: s.keterangan || s['_raw_12'] || (isPalsu ? 'Potensi Palsu' : 'Aman'),
+          keterangan: s.keterangan || s['_raw_12'] || (isPalsu ? 'Potensi Palsu' : 'Aman'),
+          nominalcollect: '0',
+          dokumentasifoto: cleanGoogleDriveUrl_(String(s.dokumentasifoto || s.foto || s['_raw_13'] || '')),
+          tanggal: s.tanggal || s['_raw_0'] || '',
+          waktu: s.waktu || s['_raw_1'] || '',
+          is_sosialisasi: true
+        };
+        sosMappedRows.push(dRow);
+      });
+
+      // Gabungkan rekaman Sosialisasi ke dalam baris rawRows Dashboard
+      rawRows = rawRows.concat(sosMappedRows);
+
+      dashboardMetrics = {
+        sosTotal: sosTotal,
+        sosAman: sosAman,
+        sosPotensiPalsu: sosPotensiPalsu
+      };
+    }
+
+    if (sheetKey === 'monitoringGD') {
+      var totAmountGD1 = 0, totAmountGD2 = 0;
+      var mitrasGD1 = {}, mitrasGD2 = {};
+      var newMitraGD1 = 0, lanMitraGD1 = 0;
+      var newMitraGD2 = 0, lanMitraGD2 = 0;
+
+      rawRows.forEach(function(r) {
+        var plf = parseFloat(String(r.plafond || r['_raw_10'] || '0').replace(/[^0-9]/g, '')) || 0;
+        var gdType = String(r.gd_2 || r['_raw_14'] || '').trim().toUpperCase();
+        var borrower = String(r.borrower || r.namamitra || r.customer_name || r['_raw_2'] || '').trim().toLowerCase();
+        var katMitra = String(r.kategori_mitra || r.kategori_cycle || r['_raw_18'] || '').trim().toLowerCase();
+        var isNew = (katMitra.indexOf('baru') !== -1 || katMitra.indexOf('new') !== -1);
+        var isLan = (katMitra.indexOf('lanjut') !== -1 || katMitra.indexOf('subsequent') !== -1);
+
+        if (gdType.indexOf('GD 1') !== -1 || gdType === '1' || gdType === 'GD1') {
+          totAmountGD1 += plf;
+          if (borrower) mitrasGD1[borrower] = true;
+          if (isNew) newMitraGD1++;
+          else if (isLan) lanMitraGD1++;
+        } else if (gdType.indexOf('GD 2') !== -1 || gdType === '2' || gdType === 'GD2') {
+          totAmountGD2 += plf;
+          if (borrower) mitrasGD2[borrower] = true;
+          if (isNew) newMitraGD2++;
+          else if (isLan) lanMitraGD2++;
+        }
+      });
+
+      var appRes = getRawDataWithHeaders_('approvalPerhari');
+      var appData = appRes.rows || [];
+      var kpSudahNom = 0, kpSudahCnt = 0;
+      var kpMenungguNom = 0, kpMenungguCnt = 0;
+
+      appData.forEach(function(ar) {
+        var pType = String(ar.product_type || ar['_raw_15'] || '').trim().toLowerCase();
+        if (pType.indexOf('grub') === -1 && pType.indexOf('group') === -1) return;
+
+        var stCair = String(ar.status_cair || ar['_raw_14'] || ar['_raw_13'] || '').trim().toLowerCase();
+        var plfAr = parseFloat(String(ar.plafond || ar['_raw_7'] || '0').replace(/[^0-9]/g, '')) || 0;
+
+        if (stCair.indexOf('sudah cair') !== -1 || stCair === 'cair') {
+          kpSudahNom += plfAr;
+          kpSudahCnt++;
+        } else if (stCair.indexOf('menunggu') !== -1) {
+          kpMenungguNom += plfAr;
+          kpMenungguCnt++;
+        }
+      });
+
+      var totalKpAmount = kpSudahNom + kpMenungguNom;
+      var pctGD1 = totalKpAmount > 0 ? ((totAmountGD1 / totalKpAmount) * 100).toFixed(1) + '%' : '0.0%';
+      var pctGD2 = totalKpAmount > 0 ? ((totAmountGD2 / totalKpAmount) * 100).toFixed(1) + '%' : '0.0%';
+
+      gdMetrics = {
+        totalAmountGD1: totAmountGD1,
+        totalAmountGD2: totAmountGD2,
+        mitraCountGD1: Object.keys(mitrasGD1).length,
+        mitraCountGD2: Object.keys(mitrasGD2).length,
+        newMitraGD1: newMitraGD1,
+        lanMitraGD1: lanMitraGD1,
+        newMitraGD2: newMitraGD2,
+        lanMitraGD2: lanMitraGD2,
+        kpSudahCairNominal: kpSudahNom,
+        kpSudahCairCount: kpSudahCnt,
+        kpMenungguCairNominal: kpMenungguNom,
+        kpMenungguCairCount: kpMenungguCnt,
+        totalKpAmount: totalKpAmount,
+        pctGD1: pctGD1,
+        pctGD2: pctGD2
+      };
+    }
+
+    if (sheetKey === 'approvalPerhari') {
+      var valResult = getRawDataWithHeaders_('validasi');
+      var valRows = valResult.rows || [];
+      var validatedMap = {};
+      var valNameList = [];
+
+      valRows.forEach(function(v) {
+        var vLoan = normalizeNumericId_(v.idloan || v.id_loan || v.loan_id || v['_raw_4']);
+        var vCust = normalizeNumericId_(v.customer_number || v.customernumber || v['_raw_3']);
+        var vMitra = String(v.namamitra || v.nama_mitra || v['_raw_6'] || '').trim();
+        var vFoto = cleanGoogleDriveUrl_(v.dokumentasifoto || v['_raw_8'] || '');
+
+        if (vLoan) validatedMap['LOAN_' + vLoan] = { validated: true, foto: vFoto, name: vMitra };
+        if (vCust) validatedMap['CUST_' + vCust] = { validated: true, foto: vFoto, name: vMitra };
+        if (vMitra) {
+          validatedMap['NAME_' + vMitra.toLowerCase().replace(/[^a-z0-9]/g, '')] = { validated: true, foto: vFoto, name: vMitra };
+          valNameList.push({ name: vMitra, foto: vFoto });
+        }
+      });
+
+      var postDisbResult = getRawDataWithHeaders_('postDisbLog');
+      var postDisbRows = postDisbResult.rows || [];
+      var verifiedPostMap = {};
+      postDisbRows.forEach(function(pRow) {
+        var pLoan = normalizeNumericId_(pRow.loan_id || pRow.idloan || pRow['_raw_1']);
+        var pCust = normalizeNumericId_(pRow.customer_number || pRow['_raw_2']);
+        var pProof = cleanGoogleDriveUrl_(String(pRow['_raw_15'] || pRow.bukti_url || pRow.buktiverifikasi || ''));
+        var pStatus = String(pRow.status_post_disb || pRow['_raw_14'] || 'Sudah Post Disb').trim();
+        var pVerifierRole = String(pRow.verified_by_role || pRow['_raw_10'] || '').trim();
+        var pVerifierName = String(pRow.verified_by_name || pRow['_raw_11'] || '').trim();
+
+        var postObj = {
+          verified: (pStatus === 'Sudah Post Disb'),
+          status: pStatus,
+          proofUrl: pProof,
+          role: pVerifierRole,
+          name: pVerifierName
+        };
+
+        if (pLoan) verifiedPostMap['LOAN_' + pLoan] = postObj;
+        if (pCust) verifiedPostMap['CUST_' + pCust] = postObj;
+      });
+
+      rawRows.forEach(function(appRow) {
+        var appLoan = normalizeNumericId_(appRow.loan_id || appRow.idloan || appRow['_raw_5']);
+        var appCustNum = normalizeNumericId_(appRow.customer_number || appRow.customernumber || appRow['_raw_3']);
+        var appName = String(appRow.customer_name || appRow.customername || appRow['_raw_4'] || '').trim();
+        var appNameNorm = appName.toLowerCase().replace(/[^a-z0-9]/g, '');
+        var pType = String(appRow.product_type || appRow['_raw_15'] || '').trim().toLowerCase();
+        var isGroupLoan = (pType.indexOf('grub') !== -1 || pType.indexOf('group') !== -1);
+
+        var matchVal = null;
+        if (appLoan && validatedMap['LOAN_' + appLoan]) matchVal = validatedMap['LOAN_' + appLoan];
+        else if (appCustNum && validatedMap['CUST_' + appCustNum]) matchVal = validatedMap['CUST_' + appCustNum];
+        else if (appNameNorm && validatedMap['NAME_' + appNameNorm]) matchVal = validatedMap['NAME_' + appNameNorm];
+        else if (appName && valNameList.length > 0) {
+          for (var vf = 0; vf < valNameList.length; vf++) {
+            if (calculateNameSimilarity_(valNameList[vf].name, appName) >= 0.90) {
+              matchVal = { validated: true, foto: valNameList[vf].foto, name: valNameList[vf].name };
+              break;
+            }
+          }
+        }
+
+        if (isGroupLoan) {
+          appRow['status_validasi'] = 'Sudah Validasi';
+          appRow['is_group_loan'] = true;
+          appRow['foto_validasi'] = (matchVal && matchVal.foto) ? matchVal.foto : '';
+        } else {
+          if (matchVal && matchVal.validated) {
+            appRow['status_validasi'] = 'Sudah Validasi';
+            appRow['foto_validasi'] = matchVal.foto || '';
+          } else {
+            appRow['status_validasi'] = 'Belum Validasi';
+            appRow['foto_validasi'] = '';
+          }
+          appRow['is_group_loan'] = false;
+        }
+
+        var postMatch = null;
+        if (appLoan && verifiedPostMap['LOAN_' + appLoan]) postMatch = verifiedPostMap['LOAN_' + appLoan];
+        else if (appCustNum && verifiedPostMap['CUST_' + appCustNum]) postMatch = verifiedPostMap['CUST_' + appCustNum];
+
+        if (postMatch) {
+          appRow['status_post_disb'] = postMatch.status;
+          appRow['bukti_post_disb'] = postMatch.proofUrl || '';
+          appRow['bukti_url'] = postMatch.proofUrl || '';
+          appRow['post_disb_verifier'] = (postMatch.role ? postMatch.role + ' ' : '') + postMatch.name;
+        } else {
+          appRow['status_post_disb'] = 'Belum Post Disb';
+          appRow['bukti_post_disb'] = '';
+          appRow['bukti_url'] = '';
+          appRow['post_disb_verifier'] = '';
+        }
+
+        appRow['_raw_status_validasi'] = appRow['status_validasi'];
+      });
+    }
+
+    if (sheetKey === 'cohort7') {
+      var wobResult = getRawDataWithHeaders_('wob');
+      var wobRows = wobResult.rows || [];
+
+      // Sort Kunjungan WOB berurutan Tanggal/Jam Terbaru (Descending)
+      wobRows.sort(function(a, b) {
+        return getRowDateTimeMs_(b) - getRowDateTimeMs_(a);
+      });
+
+      var wobMap = {};
+      var wobNameList = [];
+
+      wobRows.forEach(function(w) {
+        var wLoan = normalizeNumericId_(w.idloan || w.id_loan || w.loan_id || w['_raw_4']);
+        var wCust = normalizeNumericId_(w.customer_number || w.customernumber || w['_raw_3']);
+        var wMitra = String(w.namamitra || w.nama_mitra || w['_raw_5'] || '').trim();
+        var wFoto = cleanGoogleDriveUrl_(w.dokumentasifoto || w['_raw_8'] || '');
+        var wHasil = String(w.hasilvisit || w.keterangan || w['_raw_6'] || '').trim();
+        var wNominal = w.nominalcollect || w['_raw_7'] || 0;
+        var wTimeMs = getRowDateTimeMs_(w);
+
+        var wobObj = {
+          visited: true,
+          hasil: wHasil || 'Sudah Dikunjungi WOB',
+          foto: wFoto,
+          nominal: wNominal,
+          name: wMitra,
+          timestampMs: wTimeMs,
+          tanggal: w.tanggal || w['_raw_12'] || w['_raw_0'] || ''
+        };
+
+        // Simpan hanya rekaman kunjungan paling pertama (terbaru)
+        if (wLoan && !wobMap['LOAN_' + wLoan]) wobMap['LOAN_' + wLoan] = wobObj;
+        if (wCust && !wobMap['CUST_' + wCust]) wobMap['CUST_' + wCust] = wobObj;
+        if (wMitra) {
+          var nameKey = wMitra.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!wobMap['NAME_' + nameKey]) {
+            wobMap['NAME_' + nameKey] = wobObj;
+            wobNameList.push({ name: wMitra, obj: wobObj });
+          }
+        }
+      });
+
+      rawRows.forEach(function(cRow) {
+        var cLoan = normalizeNumericId_(cRow.loan_id || cRow.idloan || cRow['_raw_7']);
+        var cCust = normalizeNumericId_(cRow.customer_number || cRow.customernumber || cRow['_raw_4']);
+        var cName = String(cRow.customer_name || cRow.customername || cRow['_raw_5'] || '').trim();
+        var cNameNorm = cName.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        var match = null;
+        var matchType = '';
+
+        // Prioritas 1 & 2: ID Loan & Customer Number Matching Bersilang
+        if (cLoan && wobMap['LOAN_' + cLoan]) { match = wobMap['LOAN_' + cLoan]; matchType = 'id_match'; }
+        else if (cCust && wobMap['CUST_' + cCust]) { match = wobMap['CUST_' + cCust]; matchType = 'id_match'; }
+        else if (cLoan && wobMap['CUST_' + cLoan]) { match = wobMap['CUST_' + cLoan]; matchType = 'id_match'; }
+        else if (cCust && wobMap['LOAN_' + cCust]) { match = wobMap['LOAN_' + cCust]; matchType = 'id_match'; }
+        else if (cNameNorm && wobMap['NAME_' + cNameNorm]) { match = wobMap['NAME_' + cNameNorm]; matchType = 'name_match'; }
+        else if (cName && wobNameList.length > 0) {
+          // Prioritas 3 (Fallback Fuzzy Nama >= 90%)
+          for (var nf = 0; nf < wobNameList.length; nf++) {
+            if (calculateNameSimilarity_(wobNameList[nf].name, cName) >= 0.90) {
+              match = wobNameList[nf].obj;
+              matchType = 'name_match';
+              break;
+            }
+          }
+        }
+
+        if (match) {
+          cRow['status_kunjungan'] = 'Sudah Dikunjungi';
+          cRow['hasil_kunjungan'] = match.hasil;
+          cRow['bukti_foto_kunjungan'] = match.foto;
+          cRow['dokumentasifoto'] = match.foto;
+          cRow['tanggal_kunjungan_terakhir'] = match.tanggal;
+          cRow['is_visited'] = true;
+          cRow['matching_type'] = matchType;
+        } else {
+          cRow['status_kunjungan'] = 'Belum Dikunjungi';
+          cRow['hasil_kunjungan'] = '-';
+          cRow['bukti_foto_kunjungan'] = '';
+          cRow['dokumentasifoto'] = '';
+          cRow['tanggal_kunjungan_terakhir'] = '-';
+          cRow['is_visited'] = false;
+          cRow['matching_type'] = 'none';
+        }
+      });
+    }
+
+    if (sheetKey === 'renewal') {
+      var wlResult = getRawDataWithHeaders_('kunjunganWL');
+      var wlRows = wlResult.rows || [];
+
+      // Sort Kunjungan WL berurutan Tanggal/Jam Terbaru
+      wlRows.sort(function(a, b) {
+        return getRowDateTimeMs_(b) - getRowDateTimeMs_(a);
+      });
+
+      var wlMap = {};
+      var wlNameList = [];
+
+      wlRows.forEach(function(wl) {
+        var wlLoan = normalizeNumericId_(wl.idloan || wl.id_loan || wl.loan_id || wl['_raw_5']);
+        var wlCust = normalizeNumericId_(wl.customer_number || wl.customernumber || wl['_raw_4']);
+        var wlMitra = String(wl.namamitra || wl.nama_mitra || wl['_raw_6'] || '').trim();
+        var wlFoto = cleanGoogleDriveUrl_(wl.dokumentasifoto || wl['_raw_8'] || '');
+        var rawKet = String(wl.keterangan || wl['_raw_4'] || '').toLowerCase();
+        var rawHasil = String(wl.hasilvisit || wl['_raw_7'] || '').toLowerCase();
+        
+        var isMinat = (rawKet === 'minat' || (rawKet.indexOf('minat') !== -1 && rawKet.indexOf('tidak') === -1 && rawKet.indexOf('belum') === -1)) ||
+                      (rawHasil.indexOf('minat') !== -1 && rawHasil.indexOf('tidak') === -1 && rawHasil.indexOf('belum') === -1);
+
+        var wlObj = {
+          visited: true,
+          statusMinat: isMinat ? 'Minat' : 'Tidak Minat',
+          foto: wlFoto,
+          name: wlMitra,
+          timestampMs: getRowDateTimeMs_(wl)
+        };
+
+        if (wlLoan && !wlMap['LOAN_' + wlLoan]) wlMap['LOAN_' + wlLoan] = wlObj;
+        if (wlCust && !wlMap['CUST_' + wlCust]) wlMap['CUST_' + wlCust] = wlObj;
+        if (wlMitra) {
+          var nameKey2 = wlMitra.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!wlMap['NAME_' + nameKey2]) {
+            wlMap['NAME_' + nameKey2] = wlObj;
+            wlNameList.push({ name: wlMitra, obj: wlObj });
+          }
+        }
+      });
+
+      rawRows.forEach(function(rRow) {
+        var rLoan = normalizeNumericId_(rRow.loan_id || rRow.idloan || rRow.loanid || rRow['loan ID'] || rRow['Loan ID'] || rRow['ID Loan'] || rRow['_raw_2']);
+        var rCust = normalizeNumericId_(rRow.customer_number || rRow.customernumber || rRow['customer_number'] || rRow['Customer Number'] || rRow['_raw_1']);
+        var rName = String(rRow.customer_name || rRow.nama_mitra || rRow['Customer Name'] || rRow['Nama Mitra'] || rRow['_raw_3'] || '').trim();
+        var rNameNorm = rName.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        var match = null;
+        var matchType = '';
+        if (rLoan && wlMap['LOAN_' + rLoan]) { match = wlMap['LOAN_' + rLoan]; matchType = 'id_match'; }
+        else if (rCust && wlMap['CUST_' + rCust]) { match = wlMap['CUST_' + rCust]; matchType = 'id_match'; }
+        else if (rLoan && wlMap['CUST_' + rLoan]) { match = wlMap['CUST_' + rLoan]; matchType = 'id_match'; }
+        else if (rCust && wlMap['LOAN_' + rCust]) { match = wlMap['LOAN_' + rCust]; matchType = 'id_match'; }
+        else if (rNameNorm && wlMap['NAME_' + rNameNorm]) { match = wlMap['NAME_' + rNameNorm]; matchType = 'name_match'; }
+        else if (rName && wlNameList.length > 0) {
+          for (var nf2 = 0; nf2 < wlNameList.length; nf2++) {
+            if (calculateNameSimilarity_(wlNameList[nf2].name, rName) >= 0.90) {
+              match = wlNameList[nf2].obj;
+              matchType = 'name_match';
+              break;
+            }
+          }
+        }
+
+        if (match) {
+          rRow['status_kunjungan'] = 'Sudah Dikunjungi';
+          rRow['status_minat'] = match.statusMinat;
+          rRow['bukti_foto'] = match.foto;
+          rRow['dokumentasifoto'] = match.foto;
+          rRow['is_visited'] = true;
+          rRow['matching_type'] = matchType;
+        } else {
+          rRow['status_kunjungan'] = 'Belum Dikunjungi';
+          rRow['status_minat'] = '-';
+          rRow['bukti_foto'] = '';
+          rRow['dokumentasifoto'] = '';
+          rRow['is_visited'] = false;
+          rRow['matching_type'] = 'none';
+        }
+      });
+    }
+
+    if (sheetKey === 'reactivation') {
+      var doResult = getRawDataWithHeaders_('kunjunganDO');
+      var doRows = doResult.rows || [];
+
+      // Sort Kunjungan DO berurutan Tanggal/Jam Terbaru
+      doRows.sort(function(a, b) {
+        return getRowDateTimeMs_(b) - getRowDateTimeMs_(a);
+      });
+
+      var doMap = {};
+      var doNameList = [];
+
+      doRows.forEach(function(d) {
+        var dLoan = normalizeNumericId_(d.idloan || d.id_loan || d.loan_id || d['_raw_5']);
+        var dCust = normalizeNumericId_(d.customer_number || d.customernumber || d['_raw_4']);
+        var dMitra = String(d.namamitra || d.nama_mitra || d['_raw_6'] || '').trim();
+        var dFoto = cleanGoogleDriveUrl_(d.dokumentasifoto || d['_raw_8'] || '');
+        var rawKet = String(d.keterangan || d['_raw_4'] || '').toLowerCase();
+        var rawHasil = String(d.hasilvisit || d['_raw_7'] || '').toLowerCase();
+        
+        var isMinat = (rawKet === 'minat' || (rawKet.indexOf('minat') !== -1 && rawKet.indexOf('tidak') === -1 && rawKet.indexOf('belum') === -1)) ||
+                      (rawHasil.indexOf('minat') !== -1 && rawHasil.indexOf('tidak') === -1 && rawHasil.indexOf('belum') === -1);
+
+        var doObj = {
+          visited: true,
+          statusMinat: isMinat ? 'Minat' : 'Tidak Minat',
+          foto: dFoto,
+          name: dMitra,
+          timestampMs: getRowDateTimeMs_(d)
+        };
+
+        if (dLoan && !doMap['LOAN_' + dLoan]) doMap['LOAN_' + dLoan] = doObj;
+        if (dCust && !doMap['CUST_' + dCust]) doMap['CUST_' + dCust] = doObj;
+        if (dMitra) {
+          var nameKey3 = dMitra.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!doMap['NAME_' + nameKey3]) {
+            doMap['NAME_' + nameKey3] = doObj;
+            doNameList.push({ name: dMitra, obj: doObj });
+          }
+        }
+      });
+
+      rawRows.forEach(function(reRow) {
+        var reLoan = normalizeNumericId_(reRow.loan_id || reRow.idloan || reRow.loanid || reRow['loan ID'] || reRow['Loan ID'] || reRow['ID Loan'] || reRow['_raw_2']);
+        var reCust = normalizeNumericId_(reRow.customer_number || reRow.customernumber || reRow['customer_number'] || reRow['Customer Number'] || reRow['_raw_1']);
+        var reName = String(reRow.customer_name || reRow.nama_mitra || reRow['Customer Name'] || reRow['Nama Mitra'] || reRow['_raw_3'] || '').trim();
+        var reNameNorm = reName.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        var match = null;
+        var matchType = '';
+        if (reLoan && doMap['LOAN_' + reLoan]) { match = doMap['LOAN_' + reLoan]; matchType = 'id_match'; }
+        else if (reCust && doMap['CUST_' + reCust]) { match = doMap['CUST_' + reCust]; matchType = 'id_match'; }
+        else if (reLoan && doMap['CUST_' + reLoan]) { match = doMap['CUST_' + reLoan]; matchType = 'id_match'; }
+        else if (reCust && doMap['LOAN_' + reCust]) { match = doMap['LOAN_' + reCust]; matchType = 'id_match'; }
+        else if (reNameNorm && doMap['NAME_' + reNameNorm]) { match = doMap['NAME_' + reNameNorm]; matchType = 'name_match'; }
+        else if (reName && doNameList.length > 0) {
+          for (var nf3 = 0; nf3 < doNameList.length; nf3++) {
+            if (calculateNameSimilarity_(doNameList[nf3].name, reName) >= 0.90) {
+              match = doNameList[nf3].obj;
+              matchType = 'name_match';
+              break;
+            }
+          }
+        }
+
+        if (match) {
+          reRow['status_kunjungan'] = 'Sudah Dikunjungi';
+          reRow['status_minat'] = match.statusMinat;
+          reRow['bukti_foto'] = match.foto;
+          reRow['dokumentasifoto'] = match.foto;
+          reRow['is_visited'] = true;
+          reRow['matching_type'] = matchType;
+        } else {
+          reRow['status_kunjungan'] = 'Belum Dikunjungi';
+          reRow['status_minat'] = '-';
+          reRow['bukti_foto'] = '';
+          reRow['dokumentasifoto'] = '';
+          reRow['is_visited'] = false;
+          reRow['matching_type'] = 'none';
+        }
+      });
+    }
+
+    var isLoanPaidSheet = (sheetKey === 'loanPaidPoint' || sheetKey === 'loanPaidArea' || sheetKey === 'loanPaidRegional');
+    if (!isLoanPaidSheet) {
+      rawRows.reverse();
+    }
+
+    var filteredRows = rawRows.filter(function(row) {
+      if (isGuest) return true;
+
+      if (sheetKey === 'loanPaidRegional') {
+        return (role === '1-RM' || role === 'Editor' || role === 'Admin');
+      }
+
+      if (sheetKey === 'loanPaidArea') {
+        if (role === '1-RM' || role === 'Editor' || role === 'Admin') return true;
+        if (role === '2-AM') {
+          var lpArea = String(row.area || row.Area || row['_raw_1'] || '').trim().toLowerCase();
+          return !userArea || lpArea === userArea;
+        }
+        return false;
+      }
+
+      if (sheetKey === 'loanPaidPoint') {
+        if (role === '1-RM' || role === 'Editor' || role === 'Admin') return true;
+        var lpPtArea = String(row.area || row.Area || row['_raw_1'] || '').trim().toLowerCase();
+        var lpPtBranch = String(row.point || row.branch || row['_raw_2'] || '').trim().toLowerCase();
+        if (role === '2-AM') return !userArea || lpPtArea === userArea;
+        if (role === '3-BM') return !userPoint || lpPtBranch === userPoint;
+        return false;
+      }
+
+      // Filter Wilayah Bahan Kunjungan (Cohort 7+, Renewal, Reactivation)
+      if (sheetKey === 'cohort7' || sheetKey === 'renewal' || sheetKey === 'reactivation') {
+        if (role === '1-RM' || role === 'Editor' || role === 'Admin') return true;
+        var bArea = String(row.area || row['_raw_1'] || row['Area'] || '').trim().toLowerCase();
+        var bPoint = String(row.branch || row.point || row['_raw_2'] || row['Point'] || row['Branch'] || '').trim().toLowerCase();
+        if (role === '2-AM') return !userArea || bArea === userArea;
+        if (role === '3-BM') return !userPoint || bPoint === userPoint;
+        if (isBpRole) {
+          var agent = String(row.agent_fullname || row.bp || row.bp_name || row['_raw_12'] || row['agent_fullname'] || '').trim().toLowerCase();
+          if (!userName) return false;
+          return calculateNameSimilarity_(agent, userName) >= 0.90;
+        }
+        return true;
+      }
+
+      if (sheetKey === 'monitoringGD') {
+        if (role === '1-RM' || role === 'Editor' || role === 'Admin') return true;
+        var gdArea = String(row.area || row['_raw_6'] || '').trim().toLowerCase();
+        var gdBranch = String(row.point || row.branch || row['_raw_7'] || '').trim().toLowerCase();
+        if (role === '2-AM') return !userArea || gdArea === userArea;
+        if (role === '3-BM') return !userPoint || gdBranch === userPoint;
+        if (isBpRole) {
+          var gdBpUk = String(row.bp_uk || row.bpuk || row['_raw_19'] || '').trim().toLowerCase();
+          if (!userName) return false;
+          return calculateNameSimilarity_(gdBpUk, userName) >= 0.90;
+        }
+        return true;
+      }
+
+      var rowNik = String(row.nik || row.nikbp || row['nik_bp'] || row['NIK BP'] || row['_raw_0'] || '').trim();
+      var rowBP = String(row.bpbm || row.bp || row.namabp || row.nama || row['_raw_1'] || '').trim().toLowerCase();
+      var rowPoint = String(row.point || row.branch || row['BRANCH'] || row['_raw_2'] || '').trim().toLowerCase();
+      var rowArea = String(row.area || row.Area || row['_raw_3'] || '').trim().toLowerCase();
+
+      if (role === '1-RM' || role === 'Editor' || role === 'Admin') return true;
+      if (role === '2-AM') {
+        if (!userArea) return true;
+        return rowArea === userArea;
+      }
+      if (role === '3-BM') {
+        if (!userPoint) return true;
+        return rowPoint === userPoint;
+      }
+      if (isBpRole) {
+        if (!userNik && !userName) return false;
+        if (userNik && rowNik && rowNik === userNik) return true;
+        if (userName && rowBP) {
+          if (rowBP === userName || rowBP.indexOf(userName) !== -1 || userName.indexOf(rowBP) !== -1) return true;
+        }
+        return false;
+      }
+      return true;
+    });
+
+    return {
+      isGuest: isGuest,
+      rows: filteredRows,
+      headers: headers,
+      lastUpdate: lastUpdateStr,
+      metrics: gdMetrics || dashboardMetrics
+    };
+  } catch (err) {
+    throw new Error('Gagal mengambil data: ' + err.toString());
+  }
+}
+
+function uploadBahanKunjungan(payload, userSession) {
+  try {
+    if (!userSession || !userSession.role) {
+      return { status: 'error', message: 'Akses ditolak! Silakan login terlebih dahulu.' };
+    }
+    var role = String(userSession.role).trim();
+    if (role !== '1-RM' && role !== '2-AM' && role !== 'Editor' && role !== 'Admin') {
+      return { status: 'error', message: 'Hak akses terbatas! Hanya Role 1-RM dan 2-AM yang berhak mengunggah berkas Bahan Kunjungan.' };
+    }
+
+    payload = payload || {};
+    var menuType = String(payload.menuType || '').trim(); // 'Renewal' atau 'Reactivation'
+    var fileName = String(payload.fileName || 'Data_Unggahan.xlsx').trim();
+    var rowsData = payload.rowsData || [];
+    var customHeaders = payload.headers || [];
+
+    if (menuType !== 'Renewal' && menuType !== 'Reactivation') {
+      return { status: 'error', message: 'Tipe menu bahan kunjungan tidak valid!' };
+    }
+
+    if (!rowsData || rowsData.length === 0) {
+      return { status: 'error', message: 'Data berkas kosong atau tidak ada baris yang valid untuk diproses!' };
+    }
+
+    var targetSheetName = (menuType === 'Renewal') ? 'Renewal_Data' : 'Reactivation_Data';
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error', message: 'Spreadsheet tidak aktif!' };
+
+    var sheet = ss.getSheetByName(targetSheetName);
+    if (!sheet) {
+      sheet = ss.insertSheet(targetSheetName);
+    }
+
+    var nowStr = Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss') + ' WITA';
+    var uploaderRole = userSession.role || 'User';
+    var uploaderName = userSession.name || userSession.nik;
+    var uploaderInfo = uploaderRole + ' ' + uploaderName;
+
+    // Ekstraksi header dinamis dari file impor
+    var headers = [];
+    if (customHeaders && customHeaders.length > 0) {
+      headers = customHeaders.slice();
+    } else if (rowsData.length > 0) {
+      headers = Object.keys(rowsData[0]);
+    }
+
+    headers = headers.filter(function(h) {
+      return h && String(h).indexOf('_raw_') === -1;
+    });
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(10000);
+
+      sheet.clearContents();
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.getRange(1, 1, 1, headers.length)
+           .setFontWeight('bold')
+           .setBackground('#101828')
+           .setFontColor('#ffffff');
+
+      var matrix = [];
+      for (var r = 0; r < rowsData.length; r++) {
+        var rowObj = rowsData[r];
+        var rowArr = [];
+        for (var c = 0; c < headers.length; c++) {
+          var colKey = headers[c];
+          var cellVal = rowObj[colKey];
+          if (cellVal === undefined || cellVal === null) cellVal = '';
+          rowArr.push(cellVal);
+        }
+        matrix.push(rowArr);
+      }
+
+      if (matrix.length > 0) {
+        var batchSize = 500;
+        for (var b = 0; b < matrix.length; b += batchSize) {
+          var chunk = matrix.slice(b, b + batchSize);
+          sheet.getRange(b + 2, 1, chunk.length, headers.length).setValues(chunk);
+        }
+      }
+
+      var auditSheet = ss.getSheetByName('Bahan_Kunjungan_Audit');
+      if (!auditSheet) {
+        auditSheet = ss.insertSheet('Bahan_Kunjungan_Audit');
+        auditSheet.appendRow(['Audit_ID', 'Timestamp_WITA', 'Menu_Tipe', 'Nama_File', 'Total_Baris', 'Uploaded_By_NIK', 'Uploaded_By_Name', 'Uploaded_By_Role']);
+      }
+      auditSheet.appendRow([
+        'AUD-' + Date.now(),
+        nowStr,
+        menuType,
+        fileName,
+        rowsData.length,
+        userSession.nik || '',
+        uploaderName,
+        uploaderRole
+      ]);
+
+      SpreadsheetApp.flush();
+      clearSheetCache_((menuType === 'Renewal') ? 'renewal' : 'reactivation');
+    } finally {
+      lock.releaseLock();
+    }
+
+    return {
+      status: 'success',
+      message: 'Berkas ' + fileName + ' (' + rowsData.length + ' baris) berhasil diunggah dengan ' + headers.length + ' kolom dinamis untuk Menu ' + menuType + '!',
+      audit: {
+        uploaderRole: uploaderRole,
+        uploaderName: uploaderName,
+        timestampWITA: nowStr,
+        fileName: fileName,
+        totalRows: rowsData.length
+      }
+    };
+  } catch (err) {
+    return { status: 'error', message: 'Gagal mengunggah berkas: ' + err.toString() };
+  }
+}
+
+function getBahanKunjunganAuditTrail(menuType) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return null;
+    var sheet = ss.getSheetByName('Bahan_Kunjungan_Audit');
+    if (!sheet || sheet.getLastRow() < 2) return null;
+
+    var vals = sheet.getDataRange().getDisplayValues();
+    var targetType = String(menuType || '').toLowerCase().trim();
+
+    for (var i = vals.length - 1; i >= 1; i--) {
+      var rType = String(vals[i][2] || '').toLowerCase().trim();
+      if (!targetType || rType === targetType) {
+        return {
+          auditId: vals[i][0],
+          timestampWITA: vals[i][1],
+          menuType: vals[i][2],
+          fileName: vals[i][3],
+          totalRows: vals[i][4],
+          uploaderNik: vals[i][5],
+          uploaderName: vals[i][6],
+          uploaderRole: vals[i][7]
+        };
+      }
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function generatePostDisbWaMessage(custName, role, custNum, plafond, bpName) {
+  var name = custName || 'Ibu/Bapak';
+  var r = role || 'Pimpinan';
+  var cNum = custNum || '-';
+  var plf = typeof plafond === 'number' ? ('Rp ' + plafond.toLocaleString('id-ID')) : (plafond || '-');
+  var bp = bpName || 'petugas lapangan kami';
+
+  return 'Halo Ibu ' + name + ', perkenalkan saya dari ' + r + ' Amartha Regional Gorontalo. Ingin konfirmasi mengenai pembiayaan Anda (' + cNum + ') sebesar ' + plf + '. Apakah dana sudah diterima dengan baik? Dan Apakah ada ' + bp + ' meminta uang bensin, Rokok atau Uang lainnya? Terima kasih.';
+}
+
+function getPostDisbData(userSession) {
+  try {
+    if (!userSession || !userSession.role) {
+      return { status: 'error', message: 'Akses ditolak! Silakan login.' };
+    }
+
+    var role = String(userSession.role || '').trim();
+    if (role !== '1-RM' && role !== '2-AM' && role !== '3-BM' && role !== 'Editor' && role !== 'Admin') {
+      return { status: 'error', message: 'Menu Konfirmasi Post Disb hanya dapat diakses oleh Role RM, AM, dan BM!' };
+    }
+
+    var userArea = String(userSession.area || '').trim().toLowerCase();
+    var userPoint = String(userSession.point || '').trim().toLowerCase();
+
+    var appResult = getRawDataWithHeaders_('approvalPerhari');
+    var appRows = appResult.rows || [];
+
+    var postResult = getRawDataWithHeaders_('postDisbLog');
+    var postRows = postResult.rows || [];
+    var verifiedMap = {};
+    postRows.forEach(function(p) {
+      var lId = normalizeNumericId_(p.loan_id || p.idloan || p['_raw_1']);
+      var cNum = normalizeNumericId_(p.customer_number || p['_raw_2']);
+      var proofLink = cleanGoogleDriveUrl_(String(p['_raw_15'] || p.bukti_url || p.buktiverifikasi || ''));
+      var pStatus = String(p.status_post_disb || p['_raw_14'] || 'Sudah Post Disb').trim();
+      var vRole = String(p.verified_by_role || p['_raw_10'] || '').trim();
+      var vName = String(p.verified_by_name || p['_raw_11'] || '').trim();
+
+      var record = {
+        status: pStatus,
+        by: (vRole ? vRole + ' ' : '') + (vName || '-'),
+        role: vRole,
+        name: vName,
+        at: p.verified_at || p['_raw_12'] || '-',
+        proof: proofLink
+      };
+
+      if (lId) verifiedMap['LOAN_' + lId] = record;
+      if (cNum) verifiedMap['CUST_' + cNum] = record;
+    });
+
+    var rows = [];
+    var countVerified = 0;
+    var countUnverified = 0;
+    var countNoResponse = 0;
+    var countUnreachable = 0;
+
+    appRows.forEach(function(r) {
+      var stCair = String(r.status_cair || r.statuscair || r['_raw_14'] || r['_raw_13'] || '').trim().toLowerCase();
+      if (stCair.indexOf('sudah cair') === -1 && stCair !== 'cair') return;
+
+      var rArea = String(r.area || r['_raw_1'] || '').trim();
+      var rPoint = String(r.point || r.branch || r['_raw_2'] || '').trim();
+
+      if (role === '2-AM' && userArea && rArea.toLowerCase() !== userArea) return;
+      if (role === '3-BM' && userPoint && rPoint.toLowerCase() !== userPoint) return;
+
+      var loanId = String(r.loan_id || r.idloan || r['_raw_5'] || '').trim();
+      var custNum = String(r.customer_number || r.customernumber || r['_raw_3'] || '').trim();
+      var cleanLoan = normalizeNumericId_(loanId);
+      var cleanCust = normalizeNumericId_(custNum);
+
+      var statusPost = 'Belum Post Disb';
+      var verifierInfo = null;
+
+      if (cleanLoan && verifiedMap['LOAN_' + cleanLoan]) {
+        verifierInfo = verifiedMap['LOAN_' + cleanLoan];
+        statusPost = verifierInfo.status;
+      } else if (cleanCust && verifiedMap['CUST_' + cleanCust]) {
+        verifierInfo = verifiedMap['CUST_' + cleanCust];
+        statusPost = verifierInfo.status;
+      }
+
+      if (statusPost === 'Sudah Post Disb') countVerified++;
+      else if (statusPost === 'Tidak Direspon') countNoResponse++;
+      else if (statusPost === 'Tidak Bisa Dihubungi') countUnreachable++;
+      else countUnverified++;
+
+      var custName = r.customer_name || r.customername || r['_raw_4'] || '';
+      var bpName = r.bp || r.bpbm || r['_raw_13'] || '';
+      var plafondNum = parseFloat(String(r.plafond || r['_raw_7'] || '0').replace(/[^0-9]/g, '')) || 0;
+      var waMessage = generatePostDisbWaMessage(custName, role, custNum, plafondNum, bpName);
+
+      rows.push({
+        regional: r.regional || r['_raw_0'] || 'Gorontalo',
+        area: rArea,
+        branch: rPoint,
+        customer_number: custNum,
+        customer_name: custName,
+        loan_id: loanId,
+        majelis: r.majelis || r['_raw_6'] || '',
+        plafond: r.plafond || r['_raw_7'] || '0',
+        disbursement_date: r.disbursement_date || r.disbdate || r['_raw_8'] || '',
+        tanggal_approve_uk: r.tanggal_approve_uk || r.tanggalapproveuk || r['_raw_11'] || '',
+        bp: bpName,
+        product_type: r.product_type || r.producttype || r['_raw_15'] || '',
+        phone_no: r.phone_no || r.phoneno || r['_raw_16'] || '',
+        status_post_disb: statusPost,
+        verified_by: verifierInfo ? verifierInfo.by : '',
+        verified_by_role: verifierInfo ? verifierInfo.role : '',
+        verified_by_name: verifierInfo ? verifierInfo.name : '',
+        verified_at: verifierInfo ? verifierInfo.at : '',
+        bukti_url: verifierInfo ? verifierInfo.proof : '',
+        wa_template: waMessage
+      });
+    });
+
+    var totalRows = rows.length;
+    var pctVerified = totalRows > 0 ? ((countVerified / totalRows) * 100).toFixed(1) + '%' : '0.0%';
+    var pctUnverified = totalRows > 0 ? ((countUnverified / totalRows) * 100).toFixed(1) + '%' : '0.0%';
+    var pctNoResponse = totalRows > 0 ? ((countNoResponse / totalRows) * 100).toFixed(1) + '%' : '0.0%';
+    var pctUnreachable = totalRows > 0 ? ((countUnreachable / totalRows) * 100).toFixed(1) + '%' : '0.0%';
+
+    return {
+      status: 'success',
+      rows: rows,
+      totalCount: totalRows,
+      unverifiedCount: countUnverified,
+      metrics: {
+        total: totalRows,
+        verifiedCount: countVerified,
+        unverifiedCount: countUnverified,
+        noResponseCount: countNoResponse,
+        unreachableCount: countUnreachable,
+        pctVerified: pctVerified,
+        pctUnverified: pctUnverified,
+        pctNoResponse: pctNoResponse,
+        pctUnreachable: pctUnreachable
+      }
+    };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function verifyPostDisb(payload, userSession) {
+  try {
+    if (!userSession || !userSession.role) {
+      return { status: 'error', message: 'Akses ditolak! Silakan login.' };
+    }
+
+    var role = String(userSession.role || '').trim();
+    if (role !== '1-RM' && role !== '2-AM' && role !== '3-BM' && role !== 'Editor' && role !== 'Admin') {
+      return { status: 'error', message: 'Hanya Role 1-RM, 2-AM, dan 3-BM yang berhak memverifikasi Post Disb!' };
+    }
+
+    payload = payload || {};
+    var loanId = String(payload.loan_id || payload.idloan || '').trim();
+    var custNum = String(payload.customer_number || payload.customernumber || '').trim();
+    var custName = String(payload.customer_name || payload.customername || '').trim();
+    var statusChoice = String(payload.status_choice || 'Sudah Post Disb').trim();
+
+    if (!loanId && !custNum) {
+      return { status: 'error', message: 'Nomor Loan / Customer Number tidak valid!' };
+    }
+
+    var proofBase64 = payload.proofBase64 || '';
+    var proofMimeType = String(payload.proofMimeType || '').toLowerCase().trim();
+    var proofFileName = payload.proofFileName || ('Bukti_' + (loanId || custNum));
+    var proofUrl = '-';
+
+    if (statusChoice === 'Sudah Post Disb' || statusChoice === 'Tidak Direspon') {
+      if (statusChoice === 'Sudah Post Disb' && role === '3-BM') {
+        if (!proofBase64 || proofMimeType.indexOf('video') === -1) {
+          return { status: 'error', message: 'Verifikasi Ditolak: Khusus Role 3-BM WAJIB melampirkan bukti format VIDEO (.mp4/.webm/.mov/.3gp)!' };
+        }
+      } else {
+        if (proofBase64) {
+          var isAllowed = (proofMimeType.indexOf('image') !== -1 || proofMimeType.indexOf('video') !== -1 || proofMimeType.indexOf('audio') !== -1);
+          if (!isAllowed) {
+            return { status: 'error', message: 'Format bukti hanya mendukung Gambar (PNG/JPG), Video, atau Rekaman Suara!' };
+          }
+        }
+      }
+
+      if (proofBase64 && proofBase64.indexOf('base64,') !== -1) {
+        try {
+          var folderName = 'Bukti_Post_Disb_Regional_Gorontalo';
+          var folders = DriveApp.getFoldersByName(folderName);
+          var targetFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+          targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+          var cleanData = proofBase64.split('base64,')[1];
+          var decodedBytes = Utilities.base64Decode(cleanData);
+          var ext = '.jpg';
+          var isVideo = (proofMimeType.indexOf('video') !== -1);
+          var isAudio = (proofMimeType.indexOf('audio') !== -1);
+          var isPng = (proofMimeType.indexOf('png') !== -1);
+
+          if (isVideo) ext = '.mp4';
+          else if (isAudio) ext = '.mp3';
+          else if (isPng) ext = '.png';
+
+          var blob = Utilities.newBlob(decodedBytes, proofMimeType, proofFileName.replace(/\.[^/.]+$/, "") + '_' + Date.now() + ext);
+          var file = targetFolder.createFile(blob);
+          file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          
+          var fileId = file.getId();
+          proofUrl = (isVideo || isAudio) ? ('https://drive.google.com/file/d/' + fileId + '/preview') : ('https://lh3.googleusercontent.com/d/' + fileId);
+        } catch (eDrive) {
+          Logger.log('Error upload bukti Post Disb: ' + eDrive.toString());
+        }
+      }
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error', message: 'Spreadsheet tidak aktif!' };
+
+    var sheet = ss.getSheetByName('Verifikasi_PostDisb');
+    if (!sheet) {
+      sheet = ss.insertSheet('Verifikasi_PostDisb');
+      sheet.appendRow([
+        'ID', 'Loan ID', 'Customer Number', 'Customer Name', 'Plafond',
+        'Disbursement Date', 'Tanggal Approve UK', 'BP', 'Point', 'Area',
+        'Verified By Role', 'Verified By Name', 'Verified At', 'Phone No', 'Status Post Disb', 'Bukti URL', 'Catatan'
+      ]);
+    }
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var nowStr = Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
+      var verId = 'VPD-' + Date.now();
+
+      sheet.appendRow([
+        verId, loanId, custNum, custName,
+        payload.plafond || '',
+        payload.disbursement_date || '',
+        payload.tanggal_approve_uk || '',
+        payload.bp || '',
+        payload.branch || payload.point || '',
+        payload.area || '',
+        userSession.role || '',
+        userSession.name || '',
+        nowStr,
+        payload.phone_no || '',
+        statusChoice,
+        proofUrl,
+        payload.notes || '-'
+      ]);
+
+      SpreadsheetApp.flush();
+      clearSheetCache_('approvalPerhari');
+      clearSheetCache_('postDisbLog');
+    } finally {
+      lock.releaseLock();
+    }
+
+    return {
+      status: 'success',
+      proofUrl: proofUrl,
+      verifiedRole: userSession.role || '',
+      verifiedName: userSession.name || '',
+      statusChoice: statusChoice,
+      message: 'Status mitra ' + (custName || custNum) + ' berhasil diverifikasi sebagai: ' + statusChoice
+    };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function unverifyPostDisb(payload, userSession) {
+  try {
+    if (!userSession || !userSession.role) {
+      return { status: 'error', message: 'Akses ditolak! Silakan login.' };
+    }
+
+    var role = String(userSession.role || '').trim();
+    if (role !== '1-RM' && role !== '2-AM' && role !== '3-BM' && role !== 'Editor' && role !== 'Admin') {
+      return { status: 'error', message: 'Hanya Role 1-RM, 2-AM, dan 3-BM yang berhak membatalkan status Post Disb!' };
+    }
+
+    payload = payload || {};
+    var loanId = normalizeNumericId_(payload.loan_id || payload.idloan);
+    var custNum = normalizeNumericId_(payload.customer_number || payload.customernumber);
+    var custName = String(payload.customer_name || payload.customername || '').trim();
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error', message: 'Spreadsheet tidak aktif!' };
+
+    var sheet = ss.getSheetByName('Verifikasi_PostDisb');
+    if (!sheet || sheet.getLastRow() < 2) {
+      return { status: 'success', message: 'Verifikasi dibatalkan.' };
+    }
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getDisplayValues();
+      for (var i = values.length - 1; i >= 0; i--) {
+        var rLoan = normalizeNumericId_(values[i][1]);
+        var rCust = normalizeNumericId_(values[i][2]);
+
+        if ((loanId && rLoan === loanId) || (custNum && rCust === custNum)) {
+          sheet.deleteRow(i + 2);
+        }
+      }
+      SpreadsheetApp.flush();
+      clearSheetCache_('approvalPerhari');
+      clearSheetCache_('postDisbLog');
+    } finally {
+      lock.releaseLock();
+    }
+
+    return {
+      status: 'success',
+      message: 'Status verifikasi pencairan mitra ' + (custName || custNum) + ' berhasil dibatalkan.'
+    };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function getPerformaKpPerWeekSummary(userSession, filterArea, filterPoint, filterBP) {
+  try {
+    if (!userSession || !userSession.role) {
+      return { status: 'error', message: 'Akses ditolak! Silakan login.' };
+    }
+
+    var role = String(userSession.role).trim();
+    var userArea = String(userSession.area || '').trim().toLowerCase();
+    var userPoint = String(userSession.point || '').trim().toLowerCase();
+    var userNik = String(userSession.nik || '').trim();
+    var isBpRole = (role === '4-BP' || role === '5-BPR' || role === '6-BP Buffer');
+
+    var appResult = getRawDataWithHeaders_('approvalPerhari');
+    var rows = appResult.rows || [];
+    if (rows.length === 0) {
+      return { status: 'success', areaSummary: [], pointSummary: [], bpSummary: [] };
+    }
+
+    var fArea = String(filterArea || '').trim().toLowerCase();
+    var fPoint = String(filterPoint || '').trim().toLowerCase();
+    var fBP = String(filterBP || '').trim().toLowerCase();
+
+    var dayNames = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    var weeksKey = ['W1', 'W2', 'W3', 'W4', 'W5'];
+
+    var areaMap = {}, pointMap = {}, bpMap = {};
+
+    rows.forEach(function(r) {
+      var rArea = String(r.area || r['_raw_1'] || '').trim();
+      var rPoint = String(r.point || r.branch || r['_raw_2'] || '').trim();
+      var rNik = String(r.nik || r.nik_bp || r['_raw_12'] || '').trim();
+      var rName = String(r.bp || r.bpbm || r['_raw_13'] || '').trim();
+
+      if (role === '2-AM' && userArea && rArea.toLowerCase() !== userArea) return;
+      if (role === '3-BM' && userPoint && rPoint.toLowerCase() !== userPoint) return;
+      if (isBpRole && userNik && rNik !== userNik) return;
+
+      if (fArea && rArea.toLowerCase() !== fArea) return;
+      if (fPoint && rPoint.toLowerCase() !== fPoint) return;
+      if (fBP && (rName.toLowerCase().indexOf(fBP) === -1 && rNik.indexOf(fBP) === -1)) return;
+
+      var rDateStr = r.disbursement_date || r.tanggal_approve_uk || r.tanggal || r['_raw_8'] || '';
+      var dObj = parseDateAny_(rDateStr);
+      if (!dObj || isNaN(dObj.getTime())) return;
+      var dDay = dObj.getDay();
+      if (dDay === 0) return;
+
+      var dayIdx = dDay - 1;
+      var dayName = dayNames[dayIdx];
+
+      var dayOfMonth = dObj.getDate();
+      var weekIdx = Math.min(4, Math.floor((dayOfMonth - 1) / 7));
+      var weekLabel = weeksKey[weekIdx];
+
+      var plf = parseFloat(String(r.plafond || r['_raw_7'] || '0').replace(/[^0-9]/g, '')) || 0;
+
+      if (!areaMap[rArea]) areaMap[rArea] = initEntityPerWeek_(rArea, 'Area');
+      accumulateEntityAmount_(areaMap[rArea], weekLabel, dayName, plf);
+
+      var ptKey = rArea + '_' + rPoint;
+      if (!pointMap[ptKey]) pointMap[ptKey] = initEntityPerWeek_(rPoint, 'Point', rArea);
+      accumulateEntityAmount_(pointMap[ptKey], weekLabel, dayName, plf);
+
+      var bpKey = rNik || rName;
+      if (!bpMap[bpKey]) bpMap[bpKey] = initEntityPerWeek_(rName, 'BP', rArea, rPoint, rNik);
+      accumulateEntityAmount_(bpMap[bpKey], weekLabel, dayName, plf);
+    });
+
+    var areaList = finalizeWeekComparison_(areaMap);
+    var pointList = finalizeWeekComparison_(pointMap);
+    var bpList = finalizeWeekComparison_(bpMap);
+
+    return {
+      status: 'success',
+      areaSummary: areaList,
+      pointSummary: pointList,
+      bpSummary: bpList
+    };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function initEntityPerWeek_(name, type, area, point, nik) {
+  return {
+    name: name,
+    type: type,
+    area: area || name,
+    point: point || '-',
+    nik: nik || '-',
+    weeks: {
+      W1: { Senin:0, Selasa:0, Rabu:0, Kamis:0, Jumat:0, Sabtu:0, total:0 },
+      W2: { Senin:0, Selasa:0, Rabu:0, Kamis:0, Jumat:0, Sabtu:0, total:0 },
+      W3: { Senin:0, Selasa:0, Rabu:0, Kamis:0, Jumat:0, Sabtu:0, total:0 },
+      W4: { Senin:0, Selasa:0, Rabu:0, Kamis:0, Jumat:0, Sabtu:0, total:0 },
+      W5: { Senin:0, Selasa:0, Rabu:0, Kamis:0, Jumat:0, Sabtu:0, total:0 }
+    },
+    totalBulan: 0
+  };
+}
+
+function accumulateEntityAmount_(entity, week, day, amount) {
+  if (entity.weeks[week] && entity.weeks[week][day] !== undefined) {
+    entity.weeks[week][day] += amount;
+    entity.weeks[week].total += amount;
+    entity.totalBulan += amount;
+  }
+}
+
+function finalizeWeekComparison_(map) {
+  var list = [];
+  var days = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+
+  Object.keys(map).forEach(function(k) {
+    var item = map[k];
+    item.comparisons = [];
+
+    var pairs = [
+      { from: 'W2', to: 'W1', label: 'W2 vs W1' },
+      { from: 'W3', to: 'W2', label: 'W3 vs W2' },
+      { from: 'W4', to: 'W3', label: 'W4 vs W3' }
+    ];
+
+    pairs.forEach(function(p) {
+      var wCurr = item.weeks[p.from];
+      var wPrev = item.weeks[p.to];
+      var dayDeltas = {};
+
+      days.forEach(function(d) {
+        var diff = wCurr[d] - wPrev[d];
+        var pct = wPrev[d] > 0 ? ((diff / wPrev[d]) * 100).toFixed(1) : (diff > 0 ? '100.0' : '0.0');
+        dayDeltas[d] = {
+          diff: diff,
+          pct: pct,
+          status: diff >= 0 ? 'naik' : 'turun'
+        };
+      });
+
+      var totalDiff = wCurr.total - wPrev.total;
+      var totalPct = wPrev.total > 0 ? ((totalDiff / wPrev.total) * 100).toFixed(1) : (totalDiff > 0 ? '100.0' : '0.0');
+
+      item.comparisons.push({
+        pairLabel: p.label,
+        currWeek: p.from,
+        prevWeek: p.to,
+        dayDeltas: dayDeltas,
+        totalDiff: totalDiff,
+        totalPct: totalPct,
+        status: totalDiff >= 0 ? 'naik' : 'turun'
+      });
+    });
+
+    var activeWeeks = 0;
+    if (item.weeks.W1.total > 0) activeWeeks++;
+    if (item.weeks.W2.total > 0) activeWeeks++;
+    if (item.weeks.W3.total > 0) activeWeeks++;
+    if (item.weeks.W4.total > 0) activeWeeks++;
+
+    var weeklyRunRate = activeWeeks > 0 ? Math.round(item.totalBulan / activeWeeks) : 0;
+    item.weeklyRunRate = weeklyRunRate;
+    item.projectionEOM = weeklyRunRate * 4;
+
+    list.push(item);
+  });
+
+  list.sort(function(a, b) { return b.totalBulan - a.totalBulan; });
+  return list;
+}
+
+function getRawDataWithHeaders_(sheetKey) {
+  var cache = CacheService.getScriptCache();
+  var cacheKey = 'raw_sheet_v15_' + sheetKey;
+
+  var cachedCount = cache.get(cacheKey + '_count');
+  if (cachedCount) {
+    try {
+      var count = parseInt(cachedCount, 10);
+      var jsonStr = '';
+      for (var i = 0; i < count; i++) {
+        var chunk = cache.get(cacheKey + '_' + i);
+        if (chunk === null) { jsonStr = ''; break; }
+        jsonStr += chunk;
+      }
+      if (jsonStr) {
+        return JSON.parse(jsonStr);
+      }
+    } catch (e) {}
+  }
+
+  var cfg = CONFIG.SHEETS[sheetKey];
+  var sheet = cfg ? findSheet_(cfg.name) : findSheet_(sheetKey);
+  if (!sheet) return { rows: [], headers: [] };
+  
+  var result = readSheetWithHeaders_(sheet);
+
+  try {
+    var jsonToCache = JSON.stringify(result);
+    var chunkSize = 90000;
+    var numChunks = Math.ceil(jsonToCache.length / chunkSize);
+    var cacheObj = {};
+    cacheObj[cacheKey + '_count'] = String(numChunks);
+    for (var c = 0; c < numChunks; c++) {
+      cacheObj[cacheKey + '_' + c] = jsonToCache.substring(c * chunkSize, (c + 1) * chunkSize);
+    }
+    cache.putAll(cacheObj, CONFIG.CACHE_TTL);
+  } catch (e) {}
+
+  return result;
+}
+
+function clearSheetCache_(sheetKey) {
+  try {
+    var cache = CacheService.getScriptCache();
+    if (sheetKey) {
+      cache.remove('raw_sheet_v15_' + sheetKey + '_count');
+      for (var i = 0; i < 30; i++) {
+        cache.remove('raw_sheet_v15_' + sheetKey + '_' + i);
+      }
+    }
+  } catch (e) {}
+}
+
+function clearCacheKey_(key) {
+  try { CacheService.getScriptCache().remove(key); } catch(e) {}
+}
+
+function readSheetWithHeaders_(sheet) {
+  if (!sheet) return { rows: [], headers: [] };
+  var lastRow = sheet.getLastRow();
+  var lastColumn = sheet.getLastColumn();
+  if (lastRow < 2 || lastColumn < 1) return { rows: [], headers: [] };
+
+  var sName = sheet.getName().toLowerCase();
+  var isLoanPaid = (sName.indexOf('loan paid') !== -1);
+
+  if (isLoanPaid) {
+    var values = sheet.getRange(1, 1, lastRow, lastColumn).getDisplayValues();
+    var isRegional = (sName.indexOf('regional') !== -1);
+    var startRowIdx = isRegional ? 2 : 3;
+    var headers = [];
+
+    var currentSection = '';
+    for (var c = 0; c < lastColumn; c++) {
+      var s0 = String(values[0][c] || '').trim();
+      if (s0) currentSection = s0;
+
+      if (isRegional) {
+        var m1 = String(values[1][c] || '').trim();
+        var label = m1 || values[0][c] || ('Col' + (c + 1));
+        if (m1 && currentSection && m1.toLowerCase() !== currentSection.toLowerCase()) {
+          label = currentSection + ' ' + m1;
+        }
+        headers.push(label);
+      } else {
+        var t1 = String(values[1][c] || '').trim();
+        var m2 = String(values[2][c] || '').trim();
+        var label = m2 || t1 || currentSection || ('Col' + (c + 1));
+        if (m2 && currentSection && m2.toLowerCase() !== currentSection.toLowerCase()) {
+          label = currentSection + ' ' + m2 + (t1 ? ' (' + t1 + ')' : '');
+        } else if (m2 && t1) {
+          label = m2 + ' (' + t1 + ')';
+        }
+        headers.push(label);
+      }
+    }
+
+    var rows = [];
+    for (var r = startRowIdx; r < values.length; r++) {
+      var row = {};
+      var hasValue = false;
+      for (var col = 0; col < lastColumn; col++) {
+        var hName = headers[col];
+        var key = canonicalHeader_(hName);
+        var val = values[r][col] === undefined ? '' : values[r][col];
+        if (String(val).trim() !== '') hasValue = true;
+        row[key] = val;
+        row['_raw_' + col] = val;
+      }
+      if (hasValue) rows.push(row);
+    }
+    return { rows: rows, headers: headers };
+  }
+
+  // Pembacaan Dinamis Sheet Impor Bahan Kunjungan (Renewal & Reactivation)
+  if (sName === 'renewal_data' || sName === 'reactivation_data') {
+    var uValues = sheet.getRange(1, 1, lastRow, lastColumn).getDisplayValues();
+    var uHeaders = uValues[0];
+    var uRows = [];
+
+    for (var ur = 1; ur < uValues.length; ur++) {
+      var uRow = {};
+      var uHasVal = false;
+      for (var uc = 0; uc < uHeaders.length; uc++) {
+        var uHName = String(uHeaders[uc] || ('Col' + (uc + 1))).trim();
+        var uKey = canonicalHeader_(uHName);
+        var uVal = uValues[ur][uc] === undefined ? '' : uValues[ur][uc];
+        if (String(uVal).trim() !== '') uHasVal = true;
+        uRow[uHName] = uVal;
+        if (!uRow[uKey]) uRow[uKey] = uVal;
+        uRow['_raw_' + uc] = uVal;
+      }
+      if (uHasVal) uRows.push(uRow);
+    }
+    return { rows: uRows, headers: uHeaders };
+  }
+
+  var values = sheet.getRange(1, 1, lastRow, lastColumn).getDisplayValues();
+  var headers = values[0];
+  var rows = [];
+
+  for (var r = 1; r < values.length; r++) {
+    var row = {};
+    var hasValue = false;
+    for (var c = 0; c < headers.length; c++) {
+      var header = String(headers[c] || ('Col' + (c + 1))).trim();
+      var key = canonicalHeader_(header);
+      var val = values[r][c] === undefined ? '' : values[r][c];
+      if (String(val).trim() !== '') hasValue = true;
+      row[key] = val;
+      row['_raw_' + c] = val;
+    }
+    if (hasValue) rows.push(row);
+  }
+  return { rows: rows, headers: headers };
+}
+
+function canonicalHeader_(header) {
+  var raw = String(header || '').trim();
+  var normalized = raw.toLowerCase()
+                      .replace(/%/g, 'persen')
+                      .replace(/\?/g, '')
+                      .replace(/[^a-z0-9]/g, '');
+  var map = {
+    nik: 'nik', nikbp: 'nik', namabp: 'bpbm', namabpbm: 'bpbm', bpbm: 'bpbm', bp: 'bpbm',
+    nama: 'bpbm', point: 'point', area: 'area', branch: 'point', regional: 'regional',
+    targetntb: 'targetntb', targetetb: 'targetetb', actualntb: 'actualntb', actualetb: 'actualetb',
+    jumlahmitra: 'jumlahmitra', totaldisb: 'totaldisb', totalplafond: 'totalplafond',
+    total: 'total', target: 'target', targettotal: 'targettotal', achievmentntb: 'achievmentntb',
+    achievementntb: 'achievmentntb', achievmentetb: 'achievmentetb', achievementetb: 'achievmentetb',
+    achievmenttotal: 'achievmenttotal', achievementtotal: 'achievmenttotal', kategoribp: 'kategoribp',
+    ranking: 'ranking', flowrate: 'flowrate', masakerja: 'masakerja', ratarataplafonddicairkan: 'ratarataplafonddicairkan',
+    rataplafonddicairkan: 'ratarataplafonddicairkan', rata2cair: 'rata2cair', rataratacair: 'rata2cair',
+    customernumber: 'customer_number', customername: 'customer_name', loanid: 'loan_id',
+    majelis: 'majelis', plafond: 'plafond', month: 'month', loancycle: 'loan_cycle',
+    tanggalapproveuk: 'tanggal_approve_uk', statuscair: 'status_cair', producttype: 'product_type',
+    phoneno: 'phone_no', tenor: 'tenor', kategori_cycle: 'kategori_cycle', totalskorkpi: 'totalskorkpi',
+    skorkpi: 'totalskorkpi', totalproyeksiinsentif: 'totalproyeksiinsentif', proyeksiinsentif: 'totalproyeksiinsentif',
+    dapatboost: 'dapatboost', parameterbelumtercapai: 'parameterbelumtercapai', parameteryangbelumtercapai: 'parameterbelumtercapai',
+    aktifitas: 'aktivitas', aktifitasregional: 'aktivitas', aktivitas: 'aktivitas',
+    kegiatan: 'aktivitas', jenisaktivitas: 'aktivitas', tipeaktivitas: 'aktivitas',
+    keterangan: 'keterangan', hasilvisit: 'hasilvisit', nominalcollect: 'nominalcollect',
+    dokumentasifoto: 'dokumentasifoto', tanggal: 'tanggal', waktu: 'waktu', submissionid: 'submissionId',
+    namamitra: 'namamitra', nama_mitra: 'namamitra', idloan: 'idloan', id_loan: 'idloan',
+    disbursementdate: 'disbursement_date', disbdate: 'disbursement_date', tanggaldisburse: 'disbursement_date',
+    nomortelepon: 'phone_no', nohp: 'phone_no', nomorhp: 'phone_no',
+    borrower: 'borrower', majelisid: 'majelis_id', majelis_id: 'majelis_id',
+    loanstage: 'loan_stage', loan_stage: 'loan_stage', reasongd: 'reason_gd', reason_gd: 'reason_gd',
+    categoryloan: 'category_loan', category_loan: 'category_loan',
+    statusgagaldropping: 'status_gagal_dropping', status_gagal_dropping: 'status_gagal_dropping',
+    gd2: 'gd_2', gd_2: 'gd_2', week: 'week', intensitasgd: 'intensitas_gd', intensitas_gd: 'intensitas_gd',
+    tanggalgd: 'tanggal_gd', tanggal_gd: 'tanggal_gd', kategorimitra: 'kategori_mitra', kategori_mitra: 'kategori_mitra',
+    bpuk: 'bp_uk', bp_uk: 'bp_uk',
+    groupname: 'group_name', group_name: 'group_name', agentfullname: 'agent_fullname', agent_fullname: 'agent_fullname',
+    haripelayanan: 'hari_pelayanan', hari_pelayanan: 'hari_pelayanan', dpd: 'dpd',
+    customeraddress: 'customer_address', customer_address: 'customer_address',
+    linkkoordinatalamat: 'link_koordinat_alamat', link_koordinat_alamat: 'link_koordinat_alamat',
+    outstandingamount: 'outstanding_amount', outstanding_amount: 'outstanding_amount',
+    angsuranmenunggak: 'angsuran_menunggak', angsuran_menunggak: 'angsuran_menunggak',
+    principalamount: 'principal_amount', principal_amount: 'principal_amount'
+  };
+  return map[normalized] || normalized || raw;
+}
+
+function findSheet_(sheetName) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return null;
+    var target = String(sheetName || '').trim().toLowerCase();
+    if (target === 'db_sos' || target === 'dbsos') return null;
+
+    var exact = ss.getSheetByName(sheetName);
+    if (exact && exact.getName().trim().toLowerCase() !== 'db_sos') return exact;
+
+    var sheets = ss.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      var sName = sheets[i].getName().trim().toLowerCase();
+      if (sName !== 'db_sos' && sName === target) return sheets[i];
+    }
+    return null;
+  } catch (err) { return null; }
+}
+
+function updateHeartbeat(userSession, lat, lng) {
+  try {
+    if (!userSession || !userSession.nik) return { status: 'error' };
+    var nik = String(userSession.nik).trim();
+    var now = new Date();
+    var timeStr = Utilities.formatDate(now, CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
+    var millis = now.getTime();
+
+    var cache = CacheService.getScriptCache();
+    var existingRaw = cache.get('active_user_' + nik);
+    var history = [];
+    var lastLat = parseFloat(lat) || null;
+    var lastLng = parseFloat(lng) || null;
+    var existingPhoto = cleanGoogleDriveUrl_(userSession.photoUrl || '');
+
+    if (existingRaw) {
+      try {
+        var existingData = JSON.parse(existingRaw);
+        history = existingData.history || [];
+        if (!lastLat && !lastLng) {
+           lastLat = existingData.lastLat || null;
+           lastLng = existingData.lastLng || null;
+        }
+        if (!existingPhoto && existingData.photoUrl) {
+          existingPhoto = cleanGoogleDriveUrl_(existingData.photoUrl);
+        }
+      } catch(e) {}
+    }
+    
+    // Merekam jejak rute (breadcrumb trail) selama user aktif
+    if (lastLat && lastLng) {
+      var isSameLocation = false;
+      if (history.length > 0) {
+         var lastHist = history[history.length - 1];
+         if (lastHist.lat === lastLat && lastHist.lng === lastLng) isSameLocation = true;
+      }
+      if (!isSameLocation) {
+         history.push({ lat: lastLat, lng: lastLng, time: timeStr, millis: millis });
+         if (history.length > 150) history.shift();
+      }
+    }
+
+    var userObj = {
+      nik: nik, 
+      name: userSession.name || '', 
+      role: userSession.role || '',
+      point: userSession.point || '', 
+      area: userSession.area || '',
+      lastActive: timeStr, 
+      timestampMillis: millis, 
+      isOnline: true,
+      lastLat: lastLat, 
+      lastLng: lastLng,
+      photoUrl: existingPhoto,
+      history: history
+    };
+    
+    cache.put('active_user_' + nik, JSON.stringify(userObj), 86400);
+
+    var activeNiksRaw = cache.get('active_niks_list') || '[]';
+    var activeNiks = [];
+    try { activeNiks = JSON.parse(activeNiksRaw); } catch(e) { activeNiks = []; }
+    if (activeNiks.indexOf(nik) === -1) {
+      activeNiks.push(nik);
+      cache.put('active_niks_list', JSON.stringify(activeNiks), 86400);
+    }
+    return { status: 'success' };
+  } catch (err) { return { status: 'error', message: err.toString() }; }
+}
+
+function getOnlineUsers() {
+  try {
+    var cache = CacheService.getScriptCache();
+    var activeNiksRaw = cache.get('active_niks_list') || '[]';
+    var activeNiks = [];
+    try { activeNiks = JSON.parse(activeNiksRaw); } catch(e) { activeNiks = []; }
+
+    var nowMillis = new Date().getTime();
+    var activeThreshold = 3 * 60 * 1000;
+    var onlineUsers = [];
+    var validNiks = [];
+
+    activeNiks.forEach(function(nik) {
+      var userRaw = cache.get('active_user_' + nik);
+      if (userRaw) {
+        try {
+          var u = JSON.parse(userRaw);
+          var isOnline = (nowMillis - (u.timestampMillis || 0)) <= activeThreshold;
+          if (isOnline) {
+            u.isOnline = isOnline;
+            u.photoUrl = cleanGoogleDriveUrl_(u.photoUrl);
+            onlineUsers.push(u);
+          }
+          validNiks.push(nik);
+        } catch(e) {}
+      }
+    });
+
+    if (validNiks.length !== activeNiks.length) {
+      cache.put('active_niks_list', JSON.stringify(validNiks), 86400);
+    }
+    return onlineUsers;
+  } catch (err) { return []; }
+}
+
+function getTrackingData(userSession) {
+  try {
+    if (!userSession || !userSession.role) return [];
+    var role = String(userSession.role).trim();
+    var userArea = String(userSession.area || '').trim().toLowerCase();
+    var userPoint = String(userSession.point || '').trim().toLowerCase();
+    
+    if (role !== '1-RM' && role !== '2-AM' && role !== '3-BM' && role !== 'Editor' && role !== 'Admin') return [];
+
+    var cache = CacheService.getScriptCache();
+    var activeNiksRaw = cache.get('active_niks_list') || '[]';
+    var activeNiks = [];
+    try { activeNiks = JSON.parse(activeNiksRaw); } catch(e) {}
+
+    var nowMillis = new Date().getTime();
+    var trackingUsers = [];
+    var oneDayMillis = 24 * 60 * 60 * 1000;
+
+    activeNiks.forEach(function(nik) {
+      var userRaw = cache.get('active_user_' + nik);
+      if (userRaw) {
+        try {
+          var u = JSON.parse(userRaw);
+          var uRole = String(u.role).trim();
+          var uArea = String(u.area).trim().toLowerCase();
+          var uPoint = String(u.point).trim().toLowerCase();
+          
+          var allowed = false;
+          if (role === '1-RM' || role === 'Editor' || role === 'Admin') allowed = true;
+          else if (role === '2-AM' && (uArea === userArea)) allowed = true;
+          else if (role === '3-BM' && (uPoint === userPoint)) allowed = true;
+
+          var isBpRole = (uRole === '4-BP' || uRole === '5-BPR' || uRole === '6-BP Buffer');
+          var timeDiff = nowMillis - (u.timestampMillis || 0);
+
+          if (allowed && isBpRole && u.lastLat && u.lastLng && (timeDiff <= oneDayMillis)) {
+            var diffMins = Math.floor(timeDiff / 60000);
+            var statusColor = '#22c55e';
+            if (diffMins >= 5 && diffMins <= 30) statusColor = '#eab308';
+            else if (diffMins > 30) statusColor = '#ef4444';
+
+            u.statusColor = statusColor;
+            u.diffMins = diffMins;
+            u.photoUrl = cleanGoogleDriveUrl_(u.photoUrl);
+
+            var totalDistance = 0;
+            if (u.history && u.history.length > 1) {
+              for (var h = 0; h < u.history.length - 1; h++) {
+                totalDistance += calculateDistanceMeters_(u.history[h].lat, u.history[h].lng, u.history[h+1].lat, u.history[h+1].lng);
+              }
+            }
+            u.totalDistanceKm = (totalDistance / 1000).toFixed(2);
+            trackingUsers.push(u);
+          }
+        } catch(e) {}
+      }
+    });
+
+    return trackingUsers;
+  } catch (err) { return []; }
+}
+
+function getGlobalChatMessages(userSession) {
+  try {
+    var rawResult = getRawDataWithHeaders_('GlobalChat');
+    var values = rawResult.rows || [];
+    if (values.length === 0) return [];
+
+    var userNik = userSession ? String(userSession.nik || '').trim() : '';
+    var userName = userSession ? String(userSession.name || '').trim().toLowerCase() : '';
+    var userPoint = userSession ? String(userSession.point || '').trim().toLowerCase() : '';
+    var userArea = userSession ? String(userSession.area || '').trim().toLowerCase() : '';
+
+    var msgs = [];
+    values.forEach(function(r) {
+      var readByRaw = String(r['_raw_9'] || r.readby || '');
+      var readByList = readByRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+      var senderNikStr = String(r['_raw_2'] || r.sendernik || '').trim();
+
+      var isRead = false;
+      if (userNik) {
+        if (senderNikStr === userNik) {
+          var readersOtherThanSender = readByList.filter(function(nik) { return nik !== userNik; });
+          isRead = readersOtherThanSender.length > 0;
+        } else {
+          isRead = readByList.indexOf(userNik) !== -1;
+        }
+      }
+
+      var msg = {
+        timestamp: r['_raw_0'] || r.timestamp || '',
+        senderName: r['_raw_1'] || r.sendername || '',
+        senderNik: senderNikStr,
+        message: r['_raw_3'] || r.message || '',
+        scope: r['_raw_4'] || r.scope || 'all',
+        targetValue: r['_raw_5'] || r.targetvalue || '',
+        senderRole: r['_raw_6'] || r.senderrole || '',
+        senderPoint: r['_raw_7'] || r.senderpoint || '',
+        senderArea: r['_raw_8'] || r.senderarea || '',
+        readBy: readByRaw,
+        isRead: isRead
+      };
+
+      if (userNik && msg.senderNik === userNik) {
+        msgs.push(msg);
+        return;
+      }
+
+      if (msg.scope === 'all') {
+        msgs.push(msg);
+        return;
+      }
+
+      if (msg.scope === 'area' && userArea && String(msg.senderArea).toLowerCase() === userArea) {
+        msgs.push(msg);
+        return;
+      }
+
+      if (msg.scope === 'point' && userPoint && String(msg.senderPoint).toLowerCase() === userPoint) {
+        msgs.push(msg);
+        return;
+      }
+
+      if (msg.scope === 'direct') {
+        var targetStr = String(msg.targetValue || '').trim().toLowerCase();
+        if (targetStr === userNik.toLowerCase() || targetStr === userName) {
+          msgs.push(msg);
+        }
+      }
+    });
+    return msgs;
+  } catch (err) { return []; }
+}
+
+function markChatMessagesAsRead(userSession) {
+  try {
+    if (!userSession || !userSession.nik) return { status: 'error' };
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error' };
+    var sheet = ss.getSheetByName('GlobalChat');
+    if (!sheet || sheet.getLastRow() < 2) return { status: 'success' };
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var userNik = String(userSession.nik).trim();
+      var numRows = sheet.getLastRow() - 1;
+      var range = sheet.getRange(2, 10, numRows, 1);
+      var values = range.getDisplayValues();
+      var hasChanges = false;
+
+      for (var i = 0; i < values.length; i++) {
+        var currentRead = String(values[i][0] || '');
+        if (currentRead.indexOf(userNik) === -1) {
+          values[i][0] = currentRead ? (currentRead + ',' + userNik) : userNik;
+          hasChanges = true;
+        }
+      }
+
+      if (hasChanges) {
+        range.setValues(values);
+        SpreadsheetApp.flush();
+        clearSheetCache_('GlobalChat');
+      }
+    } finally {
+      lock.releaseLock();
+    }
+    return { status: 'success' };
+  } catch (err) { return { status: 'error', message: err.toString() }; }
+}
+
+function sendGlobalMessage(payload) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error' };
+    var sheet = ss.getSheetByName('GlobalChat');
+    if (!sheet) {
+      sheet = ss.insertSheet('GlobalChat');
+      sheet.appendRow(['Timestamp', 'SenderName', 'SenderNIK', 'Message', 'Scope', 'TargetValue', 'SenderRole', 'SenderPoint', 'SenderArea', 'ReadBy']);
+    }
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var timeStr = Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
+      sheet.appendRow([
+        timeStr,
+        payload.senderName || 'Anonim',
+        payload.senderNik || '',
+        payload.message || '',
+        payload.scope || 'all',
+        payload.targetValue || '',
+        payload.senderRole || '',
+        payload.senderPoint || '',
+        payload.senderArea || '',
+        payload.senderNik || ''
+      ]);
+
+      SpreadsheetApp.flush();
+      clearSheetCache_('GlobalChat');
+    } finally {
+      lock.releaseLock();
+    }
+    return { status: 'success' };
+  } catch (err) { return { status: 'error', message: err.toString() }; }
+}
+
+function deleteGlobalMessage(payload) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error' };
+    var sheet = ss.getSheetByName('GlobalChat');
+    if (!sheet || sheet.getLastRow() < 2) return { status: 'error', message: 'Chat kosong!' };
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getDisplayValues();
+      for (var i = values.length - 1; i >= 0; i--) {
+        var r = values[i];
+        if (r[0] === payload.timestamp && String(r[2]).trim() === String(payload.senderNik).trim()) {
+          sheet.deleteRow(i + 2);
+          SpreadsheetApp.flush();
+          clearSheetCache_('GlobalChat');
+          return { status: 'success', message: 'Pesan berhasil ditarik/dihapus.' };
+        }
+      }
+    } finally {
+      lock.releaseLock();
+    }
+    return { status: 'error', message: 'Pesan tidak ditemukan.' };
+  } catch (err) { return { status: 'error', message: err.toString() }; }
+}
+
+function deleteHasilInputanRow(payload, userSession) {
+  try {
+    if (!userSession || !userSession.role) return { status: 'error', message: 'Akses ditolak! Silakan login.' };
+
+    var role = String(userSession.role).trim();
+    if (role !== '1-RM' && role !== '2-AM' && role !== 'Editor' && role !== 'Admin') {
+      return { status: 'error', message: 'Aksi Hapus hanya diizinkan untuk Role 1-RM, 2-AM, dan Editor!' };
+    }
+
+    var sheet = findSheet_('Hasil Inputan');
+    if (!sheet || sheet.getLastRow() < 2) return { status: 'error', message: 'Sheet Hasil Inputan tidak ditemukan.' };
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getDisplayValues();
+      var targetSubId = String(payload.submissionId || payload.submissionid || payload['submission id'] || payload['_raw_0'] || '').trim().toLowerCase();
+
+      if (!targetSubId) {
+         return { status: 'error', message: 'Data ID (Submission ID) tidak valid untuk dihapus!' };
+      }
+
+      for (var r = 1; r < values.length; r++) {
+        var subId = String(values[r][0] || '').trim().toLowerCase();
+        if (subId === targetSubId) {
+          sheet.deleteRow(r + 1);
+          SpreadsheetApp.flush();
+          clearSheetCache_('dashboard');
+          return { status: 'success', message: 'Data (ID: ' + targetSubId + ') berhasil dihapus dari database!' };
+        }
+      }
+    } finally {
+      lock.releaseLock();
+    }
+
+    return { status: 'error', message: 'Data tidak ditemukan di sheet Hasil Inputan.' };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function getBPList() {
+  try {
+    var cache = CacheService.getScriptCache();
+    var cached = cache.get('bp_users_list');
+    if (cached) {
+      try { return JSON.parse(cached); } catch(e) {}
+    }
+
+    var list = [];
+    var seenNiks = {};
+
+    var usersSheet = findSheet_('Users');
+    if (usersSheet && usersSheet.getLastRow() > 1) {
+      var uData = usersSheet.getRange(2, 1, usersSheet.getLastRow() - 1, 11).getDisplayValues();
+      for (var i = 0; i < uData.length; i++) {
+        var uNik = String(uData[i][0]).trim();
+        if (uNik) {
+          seenNiks[uNik] = true;
+          list.push({
+            nik: uNik,
+            name: String(uData[i][5]).trim() || ('User ' + uNik),
+            role: String(uData[i][3]).trim() || 'Karyawan',
+            point: String(uData[i][6]).trim() || '-',
+            area: String(uData[i][7]).trim() || '-',
+            photoUrl: cleanGoogleDriveUrl_(String(uData[i][10] || '').trim())
+          });
+        }
+      }
+    }
+
+    var mppSheet = findSheet_('Data MPP');
+    if (mppSheet && mppSheet.getLastRow() > 1) {
+      var mData = mppSheet.getRange(2, 1, mppSheet.getLastRow() - 1, 9).getDisplayValues();
+      for (var j = 0; j < mData.length; j++) {
+        var mNik = String(mData[j][3]).trim();
+        if (mNik && !seenNiks[mNik]) {
+          seenNiks[mNik] = true;
+          list.push({
+            nik: mNik,
+            name: String(mData[j][4]).trim() || ('User ' + mNik),
+            role: String(mData[j][8]).trim() || 'Karyawan',
+            point: String(mData[j][2]).trim() || '-',
+            area: String(mData[j][1]).trim() || '-',
+            photoUrl: ''
+          });
+        }
+      }
+    }
+
+    list.sort(function(a, b) { return a.name.localeCompare(b.name); });
+    try { cache.put('bp_users_list', JSON.stringify(list), CONFIG.CACHE_TTL); } catch(e) {}
+    return list;
+  } catch (err) { return []; }
+}
+
+function getMasterPoints() {
+  try {
+    var cache = CacheService.getScriptCache();
+    var cached = cache.get('master_points_list');
+    if (cached) {
+      try { return JSON.parse(cached); } catch(e) {}
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return [];
+    var sheet = ss.getSheetByName('Master Point');
+    if (!sheet || sheet.getLastRow() < 2) return [];
+
+    var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 7).getDisplayValues();
+    var points = [];
+
+    var parseCoord = function(val) {
+      if (!val) return 0;
+      var str = String(val).replace(',', '.').trim();
+      return parseFloat(str) || 0;
+    };
+
+    values.forEach(function(r) {
+      if (r[6] === 'Active' || !r[6]) {
+        points.push({
+          pointId: r[0], area: r[1], point: r[2],
+          latitude: parseCoord(r[3]), longitude: parseCoord(r[4]),
+          radiusMeter: parseInt(r[5], 10) || 100
+        });
+      }
+    });
+
+    try { cache.put('master_points_list', JSON.stringify(points), 600); } catch(e) {}
+    return points;
+  } catch (err) { return []; }
+}
+
+function getBPListByPoint(pointName) {
+  try {
+    var targetPoint = String(pointName || '').trim().toLowerCase();
+    var users = getBPList();
+    if (!targetPoint) return users;
+    return users.filter(function(u) { return String(u.point || '').trim().toLowerCase() === targetPoint; });
+  } catch (e) { return []; }
+}
+
+function calculateDistanceMeters_(lat1, lon1, lat2, lon2) {
+  var R = 6371000;
+  var dLat = (lat2 - lat1) * Math.PI / 180;
+  var dLon = (lon2 - lon1) * Math.PI / 180;
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function getAbsensiUserState(userSession) {
+  try {
+    if (!userSession || !userSession.nik) {
+      return { alreadyAbsen: false, isExcludedFromGroup: false };
+    }
+
+    var userNik = String(userSession.nik).trim();
+    var now = new Date();
+    var todayStr = Utilities.formatDate(now, CONFIG.TIMEZONE, 'dd/MM/yyyy');
+    
+    var cache = CacheService.getScriptCache();
+    var excludedCacheKey = 'excl_group_' + userNik + '_' + todayStr.replace(/\//g, '');
+    var isExcluded = (cache.get(excludedCacheKey) === 'true');
+
+    var rawAbsen = getRawDataWithHeaders_('absensi');
+    var rows = rawAbsen.rows || [];
+    var alreadyAbsen = false;
+
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var rNik = String(r['_raw_3'] || r.nik || '').trim();
+      var rTanggal = String(r['_raw_1'] || r.tanggal || '').trim();
+
+      if (rNik === userNik && isSameDay_(rTanggal, now)) {
+        alreadyAbsen = true; 
+        break; 
+      }
+    }
+
+    return { alreadyAbsen: alreadyAbsen, isExcludedFromGroup: isExcluded, todayDate: todayStr };
+  } catch (e) { return { alreadyAbsen: false, isExcludedFromGroup: false }; }
+}
+
+function submitAbsensi(payload, userSession) {
+  try {
+    if (!userSession || !userSession.nik) {
+      return { status: 'error', message: 'Akses ditolak! Silakan login untuk melakukan absensi.' };
+    }
+
+    payload = payload || {};
+    var type = payload.type || 'Individu';
+    var userLat = parseFloat(payload.latitude) || 0;
+    var userLng = parseFloat(payload.longitude) || 0;
+    var selectedPoint = String(payload.point || userSession.point || '').trim();
+    var photoBase64 = payload.photoBase64 || '';
+    var remarks = String(payload.keterangan || '').trim();
+    var inputStatus = String(payload.statusAbsen || 'Hadir').trim();
+    var isIzinSakit = (inputStatus === 'Izin' || inputStatus === 'Sakit');
+
+    if (!selectedPoint || selectedPoint === '-' || selectedPoint === 'Point Tidak Terpilih' || selectedPoint === 'Point') {
+      return { status: 'error', message: 'Validasi Gagal: Anda WAJIB memilih Point Master penempatan lokasi absensi Anda terlebih dahulu!' };
+    }
+
+    var now = new Date();
+    var dateStr = Utilities.formatDate(now, CONFIG.TIMEZONE, 'dd/MM/yyyy');
+    var timeStr = Utilities.formatDate(now, CONFIG.TIMEZONE, 'HH:mm:ss');
+    var hour = parseInt(Utilities.formatDate(now, CONFIG.TIMEZONE, 'HH'), 10);
+    var minute = parseInt(Utilities.formatDate(now, CONFIG.TIMEZONE, 'mm'), 10);
+    var totalMinutes = hour * 60 + minute;
+
+    var maxAllowedMinutes = isIzinSakit ? (15 * 60 + 30) : (9 * 60);
+    if (totalMinutes < (6 * 60) || totalMinutes > maxAllowedMinutes) {
+      var limitText = isIzinSakit ? 'antara pukul 06:00 hingga 15:30 WITA' : 'antara pukul 06:00 hingga 09:00 WITA';
+      return { status: 'error', message: 'Sistem menolak! Absensi berstatus ' + inputStatus + ' hanya dapat dilakukan ' + limitText + '.' };
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error', message: 'Spreadsheet tidak aktif!' };
+
+    var absensiSheet = ss.getSheetByName('Absensi');
+    if (!absensiSheet) return { status: 'error', message: 'Sheet Absensi belum dikonfigurasi!' };
+
+    var absensiData = absensiSheet.getDataRange().getDisplayValues();
+    var currentUserNik = String(userSession.nik).trim();
+
+    if (type === 'Individu') {
+      for (var r = 1; r < absensiData.length; r++) {
+        var rTanggal = String(absensiData[r][1] || '').trim();
+        var rNik = String(absensiData[r][3] || '').trim();
+        if (rNik === currentUserNik && isSameDay_(rTanggal, now)) {
+          return { status: 'error', message: 'Anda sudah absen hari ini.' };
+        }
+      }
+    }
+
+    var masterPoints = getMasterPoints();
+    var targetPointData = null;
+    for (var p = 0; p < masterPoints.length; p++) {
+      if (String(masterPoints[p].point).trim().toLowerCase() === selectedPoint.toLowerCase()) {
+        targetPointData = masterPoints[p];
+        break;
+      }
+    }
+
+    var distanceMeters = 0;
+    if (targetPointData && targetPointData.latitude && targetPointData.longitude) {
+      distanceMeters = Math.round(calculateDistanceMeters_(userLat, userLng, targetPointData.latitude, targetPointData.longitude));
+      if (!isIzinSakit && (inputStatus === 'Hadir' || inputStatus === 'Terlambat') && distanceMeters > targetPointData.radiusMeter) {
+        return {
+          status: 'error',
+          message: 'Absensi Gagal! Anda berada di luar radius point ' + targetPointData.point + ' (' + distanceMeters + 'm dari max ' + targetPointData.radiusMeter + 'm).'
+        };
+      }
+    }
+
+    var photoUrl = '-';
+    if (photoBase64 && photoBase64.indexOf('base64,') !== -1) {
+      try {
+        var folderName = 'Dokumentasi Absensi Regional Gorontalo';
+        var folders = DriveApp.getFoldersByName(folderName);
+        var targetFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+        targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+        var base64Data = photoBase64.split('base64,')[1];
+        var decodedBlob = Utilities.newBlob(Utilities.base64Decode(base64Data), 'image/jpeg', 'Absen_' + userSession.nik + '_' + Date.now() + '.jpg');
+        var file = targetFolder.createFile(decodedBlob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        photoUrl = 'https://lh3.googleusercontent.com/d/' + file.getId();
+      } catch (eDrive) {
+        Logger.log('Error simpan foto Drive: ' + eDrive.toString());
+      }
+    }
+
+    var createdBy = userSession.name + ' (' + userSession.nik + ')';
+    var absensiRecords = [];
+    var cache = CacheService.getScriptCache();
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(10000);
+
+      if (type === 'Individu') {
+        var userRole = String(userSession.role || '').trim();
+        var isAmOrRm = (userRole === '1-RM' || userRole === '2-AM');
+        var thresholdMin = isAmOrRm ? (8 * 60) : (7 * 60 + 45);
+        
+        var finalStatus = inputStatus;
+        if (inputStatus === 'Hadir' && totalMinutes > thresholdMin) {
+          finalStatus = 'Terlambat';
+        }
+
+        var absenId = 'ABS-' + Date.now() + '-' + Math.floor(100 + Math.random() * 900);
+        absensiSheet.appendRow([
+          absenId, dateStr, timeStr, userSession.nik, userSession.name, userSession.role,
+          userSession.area, selectedPoint, 'Individu', finalStatus, remarks,
+          userLat, userLng, distanceMeters, photoUrl, createdBy
+        ]);
+
+        absensiRecords.push({ name: userSession.name, status: finalStatus, keterangan: remarks });
+
+      } else if (type === 'Kelompok') {
+        var groupList = payload.groupList || [];
+        if (!Array.isArray(groupList) || groupList.length === 0) {
+          return { status: 'error', message: 'Daftar anggota kelompok tidak boleh kosong!' };
+        }
+
+        var allPointMembers = getBPListByPoint(selectedPoint);
+        var checkedNiksMap = {};
+
+        groupList.forEach(function(member) {
+          var mNik = String(member.nik).trim();
+          checkedNiksMap[mNik] = true;
+
+          var isMemberAlreadyAbsen = false;
+          for (var r = 1; r < absensiData.length; r++) {
+            if (String(absensiData[r][3]).trim() === mNik && isSameDay_(absensiData[r][1], now)) {
+              isMemberAlreadyAbsen = true;
+              break;
+            }
+          }
+
+          if (!isMemberAlreadyAbsen) {
+            var memberRole = String(member.role || '4-BP').trim();
+            var isMemberAmOrRm = (memberRole === '1-RM' || memberRole === '2-AM');
+            var thresholdMin = isMemberAmOrRm ? (8 * 60) : (7 * 60 + 45);
+            var mInputStatus = member.statusAbsen || 'Hadir';
+            
+            var mFinalStatus = mInputStatus;
+            if (mInputStatus === 'Hadir' && totalMinutes > thresholdMin) {
+              mFinalStatus = 'Terlambat';
+            }
+
+            var mRemarks = member.keterangan || remarks;
+            var absenId = 'ABS-' + Date.now() + '-' + Math.floor(100 + Math.random() * 900);
+            
+            absensiSheet.appendRow([
+              absenId, dateStr, timeStr, member.nik, member.name, memberRole,
+              userSession.area, selectedPoint, 'Kelompok', mFinalStatus, mRemarks,
+              userLat, userLng, distanceMeters, photoUrl, createdBy
+            ]);
+
+            absensiRecords.push({ name: member.name, status: mFinalStatus, keterangan: mRemarks });
+          }
+        });
+
+        allPointMembers.forEach(function(bp) {
+          var bpNik = String(bp.nik).trim();
+          if (!checkedNiksMap[bpNik]) {
+            var excludedKey = 'excl_group_' + bpNik + '_' + dateStr.replace(/\//g, '');
+            cache.put(excludedKey, 'true', 86400);
+          }
+        });
+      }
+
+      SpreadsheetApp.flush();
+      clearSheetCache_('absensi');
+    } finally {
+      lock.releaseLock();
+    }
+
+    if (userLat && userLng) {
+      updateHeartbeat(userSession, userLat, userLng);
+    }
+
+    var waText = formatAbsensiWaText_({ point: selectedPoint, records: absensiRecords });
+    return { status: 'success', message: 'Data Absensi ' + type + ' berhasil disimpan!', waText: waText, photoUrl: photoUrl };
+  } catch (err) { return { status: 'error', message: err.toString() }; }
+}
+
+function formatAbsensiWaText_(data) {
+  var lines = [];
+  lines.push('*Laporan Absensi Regional Gorontalo*');
+  lines.push('Point : ' + data.point);
+  lines.push('');
+  lines.push('Anggota :');
+  data.records.forEach(function(rec) {
+    var ketStr = rec.keterangan ? ' (' + rec.keterangan + ')' : '';
+    lines.push('• ' + rec.name + ' - ' + rec.status + ketStr);
+  });
+  return lines.join('\n');
+}
+
+function getAbsensiSummaryReport(userSession, startDate, endDate, selectedMonth, filterArea, filterPoint, filterBP) {
+  try {
+    var rawResult = getRawDataWithHeaders_('absensi');
+    var values = rawResult.rows || [];
+    if (values.length === 0) return [];
+    
+    var role = userSession ? String(userSession.role || '').trim() : '';
+    var userNik = userSession ? String(userSession.nik || '').trim() : '';
+    var userPoint = userSession ? String(userSession.point || '').trim().toLowerCase() : '';
+    var userArea = userSession ? String(userSession.area || '').trim().toLowerCase() : '';
+
+    var dFromObj = startDate ? parseDateAny_(startDate) : null;
+    var dToObj = endDate ? parseDateAny_(endDate) : null;
+    if (dFromObj) dFromObj.setHours(0,0,0,0);
+    if (dToObj) dToObj.setHours(23,59,59,999);
+
+    var targetMonthNum = null;
+    if (selectedMonth !== undefined && selectedMonth !== null && selectedMonth !== '' && selectedMonth !== 'all') {
+      targetMonthNum = parseInt(selectedMonth, 10);
+    }
+
+    var fArea = String(filterArea || '').trim().toLowerCase();
+    var fPoint = String(filterPoint || '').trim().toLowerCase();
+    var fBP = String(filterBP || '').trim().toLowerCase();
+
+    var bpMap = {};
+
+    values.forEach(function(r) {
+      var rowAbsenId = r['_raw_0'] || r.absenid || '';
+      var rowDateStr = r['_raw_1'] || r.tanggal || '';
+      var rowNik = String(r['_raw_3'] || r.nik || '').trim();
+      var rowName = String(r['_raw_4'] || r.nama || '').trim();
+      var rowRole = String(r['_raw_5'] || r.role || '').trim();
+      var rowArea = String(r['_raw_6'] || r.area || '').trim();
+      var rowPoint = String(r['_raw_7'] || r.point || '').trim();
+      var status = String(r['_raw_9'] || r.status || '').trim();
+      var rowPhoto = cleanGoogleDriveUrl_(String(r['_raw_14'] || r.fotourl || r.foto || '').trim());
+
+      if (role === '2-AM' && userArea && rowArea.toLowerCase() !== userArea) return;
+      if (role === '3-BM' && userPoint && rowPoint.toLowerCase() !== userPoint) return;
+      if ((role === '4-BP' || role === '5-BPR' || role === '6-BP Buffer') && userNik && rowNik !== userNik) return;
+
+      if (fArea && rowArea.toLowerCase() !== fArea) return;
+      if (fPoint && rowPoint.toLowerCase() !== fPoint) return;
+      if (fBP && (rowName.toLowerCase().indexOf(fBP) === -1 && rowNik.indexOf(fBP) === -1)) return;
+
+      var rowD = parseDateAny_(rowDateStr);
+
+      if (targetMonthNum !== null && !isNaN(targetMonthNum) && targetMonthNum > 0) {
+        if (!rowD || (rowD.getMonth() + 1) !== targetMonthNum) return;
+      }
+
+      if (dFromObj || dToObj) {
+        if (rowD) {
+          rowD.setHours(12,0,0,0);
+          if (dFromObj && rowD < dFromObj) return;
+          if (dToObj && rowD > dToObj) return;
+        }
+      }
+
+      var key = rowNik || rowName;
+      if (!key) return;
+
+      var canViewPhoto = false;
+      if (role === '1-RM' || role === 'Editor' || role === 'Admin' || role === '2-AM') {
+        canViewPhoto = true;
+      } else if (role === '3-BM') {
+        canViewPhoto = (rowPoint.toLowerCase() === userPoint);
+      } else if (role === '4-BP' || role === '5-BPR' || role === '6-BP Buffer') {
+        canViewPhoto = (rowNik === userNik);
+      }
+
+      if (!bpMap[key]) {
+        bpMap[key] = {
+          absenId: rowAbsenId, 
+          nik: rowNik, 
+          name: rowName, 
+          role: rowRole,
+          point: rowPoint, 
+          area: rowArea, 
+          hadir: 0, 
+          terlambat: 0, 
+          izin: 0, 
+          sakit: 0, 
+          alpha: 0, 
+          total: 0,
+          latestPhoto: (canViewPhoto && rowPhoto && rowPhoto !== '-') ? rowPhoto : '',
+          canViewPhoto: canViewPhoto
+        };
+      }
+
+      if (status === 'Hadir') bpMap[key].hadir++;
+      else if (status === 'Terlambat') bpMap[key].terlambat++;
+      else if (status === 'Izin') bpMap[key].izin++;
+      else if (status === 'Sakit') bpMap[key].sakit++;
+      else if (status === 'Tanpa Keterangan') bpMap[key].alpha++;
+
+      if (canViewPhoto && rowPhoto && rowPhoto !== '-') {
+        bpMap[key].latestPhoto = rowPhoto;
+      }
+
+      bpMap[key].total++;
+    });
+
+    var summaryList = [];
+    Object.keys(bpMap).forEach(function(k) { summaryList.push(bpMap[k]); });
+    return summaryList;
+  } catch (err) { return []; }
+}
+
+function getAbsensiDetailByUser(targetNik, userSession) {
+  try {
+    if (!userSession || !userSession.role) {
+      return { status: 'error', message: 'Akses ditolak! Silakan login.' };
+    }
+
+    var role = String(userSession.role || '').trim();
+    var userNik = String(userSession.nik || '').trim();
+    var userPoint = String(userSession.point || '').trim().toLowerCase();
+    var userArea = String(userSession.area || '').trim().toLowerCase();
+    var targetNikStr = String(targetNik || '').trim();
+
+    if (!targetNikStr) return { status: 'error', message: 'NIK personil tidak valid!' };
+
+    var rawResult = getRawDataWithHeaders_('absensi');
+    var rows = rawResult.rows || [];
+    var detailLogs = [];
+
+    rows.forEach(function(r) {
+      var rNik = String(r['_raw_3'] || r.nik || '').trim();
+      if (rNik !== targetNikStr) return;
+
+      var rArea = String(r['_raw_6'] || r.area || '').trim();
+      var rPoint = String(r['_raw_7'] || r.point || '').trim();
+
+      if (role === '2-AM' && userArea && rArea.toLowerCase() !== userArea) return;
+      if (role === '3-BM' && userPoint && rPoint.toLowerCase() !== userPoint) return;
+      if ((role === '4-BP' || role === '5-BPR' || role === '6-BP Buffer') && userNik && rNik !== userNik) return;
+
+      var createdBy = String(r['_raw_15'] || r.createdby || '').trim();
+      var status = String(r['_raw_9'] || r.status || '').trim();
+      var photo = cleanGoogleDriveUrl_(String(r['_raw_14'] || r.fotourl || r.foto || '').trim());
+
+      var isAutoAlpha = (createdBy.indexOf('Cron') !== -1 || createdBy.indexOf('System Auto-Alpha') !== -1 || status === 'Tanpa Keterangan');
+
+      detailLogs.push({
+        absenId: r['_raw_0'] || r.absenid || '',
+        tanggal: r['_raw_1'] || r.tanggal || '',
+        waktu: r['_raw_2'] || r.waktu || '',
+        nik: rNik,
+        name: r['_raw_4'] || r.nama || '',
+        role: r['_raw_5'] || r.role || '',
+        area: rArea,
+        point: rPoint,
+        tipe: r['_raw_8'] || r.tipe || 'Individu',
+        status: status,
+        keterangan: r['_raw_10'] || r.keterangan || '-',
+        jarakMeter: r['_raw_13'] || r.jarak || 0,
+        photoUrl: (photo && photo !== '-') ? photo : '',
+        createdBy: createdBy,
+        isAutoAlpha: isAutoAlpha
+      });
+    });
+
+    detailLogs.sort(function(a, b) {
+      var ta = parseDateAny_(a.tanggal);
+      var tb = parseDateAny_(b.tanggal);
+      var timeA = (ta && !isNaN(ta.getTime())) ? ta.getTime() : 0;
+      var timeB = (tb && !isNaN(tb.getTime())) ? tb.getTime() : 0;
+      return timeB - timeA;
+    });
+
+    return { status: 'success', logs: detailLogs };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function deleteAbsensiRecord(payload, userSession) {
+  try {
+    if (!userSession || !userSession.role) return { status: 'error', message: 'Akses ditolak! Silakan login.' };
+
+    var role = String(userSession.role).trim();
+    if (role !== '1-RM' && role !== '2-AM' && role !== 'Editor' && role !== 'Admin') {
+      return { status: 'error', message: 'Aksi Hapus hanya diizinkan untuk Role 1-RM, 2-AM, dan Editor!' };
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error', message: 'Spreadsheet tidak aktif!' };
+
+    var sheet = ss.getSheetByName('Absensi');
+    if (!sheet || sheet.getLastRow() < 2) return { status: 'error', message: 'Sheet Absensi tidak ditemukan atau kosong.' };
+
+    payload = payload || {};
+    var targetNik = String(payload.nik || '').trim();
+    var targetAbsenId = String(payload.absenId || payload.absen_id || '').trim();
+
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(5000);
+      var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getDisplayValues();
+
+      for (var i = values.length - 1; i >= 0; i--) {
+        var rowAbsenId = String(values[i][0] || '').trim();
+        var rowNik = String(values[i][3] || '').trim();
+
+        var isMatch = false;
+        if (targetAbsenId && rowAbsenId === targetAbsenId) isMatch = true;
+        else if (targetNik && rowNik === targetNik) isMatch = true;
+
+        if (isMatch) {
+          sheet.deleteRow(i + 2);
+          SpreadsheetApp.flush();
+          clearSheetCache_('absensi');
+          return { status: 'success', message: 'Data absensi personil berhasil dihapus dari spreadsheet!' };
+        }
+      }
+    } finally {
+      lock.releaseLock();
+    }
+
+    return { status: 'error', message: 'Data absensi tidak ditemukan.' };
+  } catch (err) { return { status: 'error', message: err.toString() }; }
+}
+
+function getDailyBPSummary(userSession, targetDateStr) {
+  try {
+    var now = new Date();
+    var targetDateObj = targetDateStr ? parseDateAny_(targetDateStr) : now;
+    if (!targetDateObj || isNaN(targetDateObj.getTime())) targetDateObj = now;
+    
+    var role = userSession ? String(userSession.role || '').trim() : '';
+    var userNik = userSession ? String(userSession.nik || '').trim() : '';
+    var userName = userSession ? String(userSession.name || '').trim().toLowerCase() : '';
+    var userPoint = userSession ? String(userSession.point || '').trim().toLowerCase() : '';
+    var userArea = userSession ? String(userSession.area || '').trim().toLowerCase() : '';
+    var isBpRole = (role === '4-BP' || role === '5-BPR' || role === '6-BP Buffer');
+
+    var rawHasil = getRawDataWithHeaders_('dashboard');
+    var rawSos = getRawDataWithHeaders_('sosialisasi');
+    var rawPel = getRawDataWithHeaders_('pelayanan');
+    
+    var hasilRows = rawHasil.rows || [];
+    var sosRows = rawSos.rows || [];
+    var pelRows = rawPel.rows || [];
+    
+    var bpRecords = [];
+
+    var isRowPermitted = function(rArea, rPoint, rNik, rBpName) {
+      if (role === '1-RM' || role === 'Editor' || role === 'Admin') return true;
+      if (role === '2-AM') return rArea.toLowerCase() === userArea;
+      if (role === '3-BM') return rPoint.toLowerCase() === userPoint;
+      if (isBpRole) {
+        if (userNik && rNik && rNik === userNik) return true;
+        if (userName && rBpName && calculateNameSimilarity_(rBpName, userName) >= 0.90) return true;
+        return false;
+      }
+      return true;
+    };
+
+    // 1. Sinkronisasi Data Sosialisasi (Aman vs Potensi Palsu)
+    sosRows.forEach(function(r) {
+      var rDate = r.tanggal || r.tanggalapproveuk || r.submittedat || r.waktu || r['_raw_0'] || '';
+      if (!isSameDay_(rDate, targetDateObj)) return;
+
+      var bpName = String(r.bpbm || r.namabp || r.bp || r.nama || r['_raw_2'] || r['_raw_1'] || '').trim();
+      var point = String(r.point || r.branch || r['_raw_3'] || '').trim();
+      var area = String(r.area || r['_raw_10'] || r['_raw_4'] || '').trim();
+      var rNik = String(r.nik || r.nikbp || r['_raw_1'] || '').trim();
+
+      if (!isRowPermitted(area, point, rNik, bpName)) return;
+
+      var ket = String(r.keterangan || r.proses || r.hasilvisit || r['_raw_12'] || r['_raw_7'] || '').toLowerCase();
+      var isPalsu = (ket.indexOf('palsu') !== -1 || ket.indexOf('potensi palsu') !== -1 || ket.indexOf('potensi') !== -1);
+      
+      findOrMergeBPRecord_(bpRecords, bpName, point, area, rNik, function(rec) {
+        rec.sosTotal++;
+        if (isPalsu) rec.sosPalsu++; else rec.sosAman++;
+      });
+    });
+
+    // 2. Sinkronisasi Data Pelayanan (D2D, Kumpul, Semi)
+    pelRows.forEach(function(r) {
+      var rDate = r.tanggal || r.waktu || r['_raw_8'] || r['_raw_0'] || '';
+      if (!isSameDay_(rDate, targetDateObj)) return;
+
+      var bpName = String(r.bpbm || r['nama bp/bm'] || r.bp || r.nama || r['_raw_2'] || '').trim();
+      var point = String(r.point || r.branch || r['_raw_1'] || '').trim();
+      var area = String(r.area || r['_raw_0'] || '').trim();
+      var rNik = String(r.nik || '').trim();
+
+      if (!isRowPermitted(area, point, rNik, bpName)) return;
+
+      var jkm = String(r.jeniskumpulanmajelis || r['_raw_4'] || '').toLowerCase();
+      
+      findOrMergeBPRecord_(bpRecords, bpName, point, area, rNik, function(rec) {
+        rec.pelayananTotal++;
+        if (jkm.indexOf('semi') !== -1) {
+          rec.pelayananSemi++;
+        } else if (jkm.indexOf('dor') !== -1 || jkm.indexOf('door') !== -1 || jkm.indexOf('d2d') !== -1) {
+          rec.pelayananD2D++;
+        } else {
+          rec.pelayananKumpul++;
+        }
+      });
+    });
+
+    // 3. Sinkronisasi Data Kunjungan Eligible, DO, dan Penagihan Kolek
+    hasilRows.forEach(function(r) {
+      if (r.is_sosialisasi) return; // Lewati baris hasil mapping Sosialisasi di dashboard
+      var rDate = r.tanggal || r.waktu || r['_raw_12'] || r['_raw_0'] || '';
+      if (!isSameDay_(rDate, targetDateObj)) return;
+
+      var bpName = String(r.bpbm || r['nama bp/bm'] || r.bp || r.nama || r['_raw_1'] || '').trim();
+      var point = String(r.point || r.branch || r['_raw_2'] || '').trim();
+      var area = String(r.area || r['_raw_3'] || '').trim();
+      var rNik = String(r.nik || r['_raw_0'] || '').trim();
+
+      if (!isRowPermitted(area, point, rNik, bpName)) return;
+
+      var act = String(r.aktivitas || r['_raw_4'] || '').toLowerCase();
+      var hst = String(r.hasilvisit || r.keterangan || r['_raw_8'] || '').toLowerCase();
+      var isMinat = (hst.indexOf('minat') !== -1 && hst.indexOf('tidak') === -1 && hst.indexOf('belum') === -1);
+      var collect = parseFloat(String(r.nominalcollect || r['_raw_10'] || '0').replace(/[^0-9]/g, '')) || 0;
+
+      findOrMergeBPRecord_(bpRecords, bpName, point, area, rNik, function(rec) {
+        if (act.indexOf('eligible') !== -1 || act.indexOf('wl') !== -1) {
+          rec.wlTotal++;
+          if (isMinat) rec.wlMinat++; else rec.wlTidakMinat++;
+        } else if (act.indexOf('do') !== -1) {
+          rec.doTotal++;
+          if (isMinat) rec.doMinat++; else rec.doTidakMinat++;
+        } else if (act.indexOf('sos') !== -1) {
+          rec.sosTotal++;
+          var isP = (hst.indexOf('palsu') !== -1 || hst.indexOf('potensi palsu') !== -1 || hst.indexOf('potensi') !== -1);
+          if (isP) rec.sosPalsu++; else rec.sosAman++;
+        } else if (act.indexOf('pelayanan') !== -1) {
+          rec.pelayananTotal++;
+          var jkm2 = String(r.jeniskumpulanmajelis || hst).toLowerCase();
+          if (jkm2.indexOf('semi') !== -1) rec.pelayananSemi++;
+          else if (jkm2.indexOf('dor') !== -1 || jkm2.indexOf('door') !== -1) rec.pelayananD2D++;
+          else rec.pelayananKumpul++;
+        } else {
+          rec.kolekTotal++;
+          rec.totalCollect += collect;
+        }
+      });
+    });
+
+    return bpRecords;
+  } catch (e) {
+    return [];
+  }
+}
+
+function findOrMergeBPRecord_(list, bpName, point, area, nik, callback) {
+  if (!bpName) return;
+  var matchedRec = null;
+
+  for (var i = 0; i < list.length; i++) {
+    var sim = calculateNameSimilarity_(list[i].bpName, bpName);
+    if (sim >= 0.90) {
+      matchedRec = list[i];
+      break;
+    }
+  }
+
+  if (!matchedRec) {
+    matchedRec = {
+      nik: nik || '',
+      bpName: bpName,
+      point: point || '-',
+      area: area || '-',
+      sosTotal: 0,
+      sosAman: 0,
+      sosPalsu: 0,
+      pelayananTotal: 0,
+      pelayananD2D: 0,
+      pelayananKumpul: 0,
+      pelayananSemi: 0,
+      wlTotal: 0,
+      wlMinat: 0,
+      wlTidakMinat: 0,
+      doTotal: 0,
+      doMinat: 0,
+      doTidakMinat: 0,
+      kolekTotal: 0,
+      totalCollect: 0
+    };
+    list.push(matchedRec);
+  }
+
+  callback(matchedRec);
+}
+
+function getApprovalMatrixSummary(userSession, startDate, endDate, selectedMonthKey, selectedWeekIndex, filterPoint, filterArea, filterBP) {
+  try {
+    var role = userSession ? String(userSession.role || '').trim() : '';
+    var userNik = userSession ? String(userSession.nik || '').trim() : '';
+    var userPoint = userSession ? String(userSession.point || '').trim().toLowerCase() : '';
+    var userArea = userSession ? String(userSession.area || '').trim().toLowerCase() : '';
+    var isBpRole = (role === '4-BP' || role === '5-BPR' || role === '6-BP Buffer');
+
+    var mppSheet = findSheet_('Data MPP');
+    var appSheet = findSheet_('Aproval Perhari') || findSheet_('KP Daily');
+    if (!mppSheet || !appSheet) return { matrix: [], dates: [], allDates: [], months: [], selectedMonth: '', weeks: [], currentWeekIndex: 0 };
+
+    var mppData = mppSheet.getDataRange().getDisplayValues();
+    var appData = appSheet.getDataRange().getDisplayValues();
+
+    var filterPt = String(filterPoint || '').trim().toLowerCase();
+    var filterAr = String(filterArea || '').trim().toLowerCase();
+    var filterBpQuery = String(filterBP || '').trim().toLowerCase();
+
+    var bpMap = {};
+    for (var m = 1; m < mppData.length; m++) {
+      var pos = String(mppData[m][8] || '').trim();
+      var isBp = (pos === '4-BP' || pos === '5-BPR' || pos === '6-BP Buffer');
+      var nik = String(mppData[m][3] || '').trim();
+      var name = String(mppData[m][4] || '').trim();
+      var pt = String(mppData[m][2] || '').trim();
+      var ar = String(mppData[m][1] || '').trim();
+
+      if (role === '2-AM' && userArea && ar.toLowerCase() !== userArea) continue;
+      if (role === '3-BM' && userPoint && pt.toLowerCase() !== userPoint) continue;
+      if (isBpRole && userNik && nik !== userNik) continue;
+
+      if (filterPt && pt.toLowerCase() !== filterPt) continue;
+      if (filterAr && ar.toLowerCase() !== filterAr) continue;
+      if (filterBpQuery && name.toLowerCase().indexOf(filterBpQuery) === -1 && nik.indexOf(filterBpQuery) === -1) continue;
+
+      if (isBp && nik) {
+        bpMap[nik] = {
+          nik: nik,
+          name: name,
+          point: pt,
+          area: ar,
+          datesMap: {}
+        };
+      }
+    }
+
+    var headers = appData[0];
+    var colDate = -1, colCust = -1, colNik = -1, colName = -1;
+
+    for (var h = 0; h < headers.length; h++) {
+      var hNorm = canonicalHeader_(headers[h]);
+      if (hNorm === 'tanggal_approve_uk' || hNorm === 'tanggal') colDate = h;
+      if (hNorm === 'customer_number') colCust = h;
+      if (hNorm === 'nik') colNik = h;
+      if (hNorm === 'bpbm') colName = h;
+    }
+
+    var monthNamesId = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+    var availableMonthsMap = {};
+    var allValidDatesMap = {};
+    var rawApprovals = [];
+
+    for (var r = 1; r < appData.length; r++) {
+      var row = appData[r];
+      var rDate = (colDate > -1 ? row[colDate] : row[11]) || '';
+      var rCust = (colCust > -1 ? row[colCust] : row[3]) || '';
+      var rNik = (colNik > -1 ? row[colNik] : row[12]) || '';
+      var rName = (colName > -1 ? row[colName] : row[13]) || '';
+
+      if (!rDate || !rCust) continue;
+
+      var dObj = parseDateAny_(rDate);
+      if (!dObj || isNaN(dObj.getTime())) continue;
+      if (dObj.getDay() === 0) continue;
+
+      var mKey = dObj.getFullYear() + '-' + ('0' + (dObj.getMonth() + 1)).slice(-2);
+      var mLabel = monthNamesId[dObj.getMonth()] + ' ' + dObj.getFullYear();
+      availableMonthsMap[mKey] = mLabel;
+
+      var dateKey = ('0' + dObj.getDate()).slice(-2) + '/' + ('0' + (dObj.getMonth() + 1)).slice(-2) + '/' + dObj.getFullYear();
+      allValidDatesMap[dateKey] = { dObj: dObj, time: dObj.getTime(), monthKey: mKey };
+
+      rawApprovals.push({
+        dateKey: dateKey,
+        monthKey: mKey,
+        rCust: String(rCust).trim(),
+        rNik: String(rNik).trim(),
+        rName: String(rName).trim()
+      });
+    }
+
+    var monthsList = Object.keys(availableMonthsMap).sort().map(function(k) {
+      return { key: k, label: availableMonthsMap[k] };
+    });
+
+    var now = new Date();
+    var currentMKey = Utilities.formatDate(now, CONFIG.TIMEZONE, 'yyyy-MM');
+    var activeMonthKey = selectedMonthKey;
+
+    if (!activeMonthKey || !availableMonthsMap[activeMonthKey]) {
+      if (availableMonthsMap[currentMKey]) {
+        activeMonthKey = currentMKey;
+      } else {
+        activeMonthKey = monthsList.length > 0 ? monthsList[monthsList.length - 1].key : currentMKey;
+      }
+    }
+
+    var monthDatesKeys = Object.keys(allValidDatesMap).filter(function(dKey) {
+      return allValidDatesMap[dKey].monthKey === activeMonthKey;
+    }).sort(function(a, b) {
+      return allValidDatesMap[a].time - allValidDatesMap[b].time;
+    });
+
+    var weeks = [];
+    var currentChunk = [];
+
+    for (var i = 0; i < monthDatesKeys.length; i++) {
+      var dtStr = monthDatesKeys[i];
+      var dtObj = allValidDatesMap[dtStr].dObj;
+
+      if (dtObj.getDay() === 1 && currentChunk.length > 0) {
+        weeks.push({
+          index: weeks.length,
+          label: 'Minggu ke-' + (weeks.length + 1) + ' (' + currentChunk[0] + ' - ' + currentChunk[currentChunk.length - 1] + ')',
+          dates: currentChunk
+        });
+        currentChunk = [];
+      }
+
+      currentChunk.push(dtStr);
+
+      if (currentChunk.length >= 6) {
+        weeks.push({
+          index: weeks.length,
+          label: 'Minggu ke-' + (weeks.length + 1) + ' (' + currentChunk[0] + ' - ' + currentChunk[currentChunk.length - 1] + ')',
+          dates: currentChunk
+        });
+        currentChunk = [];
+      }
+    }
+
+    if (currentChunk.length > 0) {
+      weeks.push({
+        index: weeks.length,
+        label: 'Minggu ke-' + (weeks.length + 1) + ' (' + currentChunk[0] + ' - ' + currentChunk[currentChunk.length - 1] + ')',
+        dates: currentChunk
+      });
+    }
+
+    var nowTs = now.getTime();
+    var detectedWeekIdx = 0;
+    if (activeMonthKey === currentMKey) {
+      for (var wk = 0; wk < weeks.length; wk++) {
+        var wObj = weeks[wk];
+        var startTs = allValidDatesMap[wObj.dates[0]].time;
+        var endTs = allValidDatesMap[wObj.dates[wObj.dates.length - 1]].time;
+        if (nowTs >= startTs && nowTs <= (endTs + 86400000)) {
+          detectedWeekIdx = wk;
+          break;
+        }
+        if (wk === weeks.length - 1 && nowTs > endTs) {
+          detectedWeekIdx = wk;
+        }
+      }
+    }
+
+    var activeWeekIdx = (selectedWeekIndex !== undefined && selectedWeekIndex !== null) ? parseInt(selectedWeekIndex, 10) : detectedWeekIdx;
+    if (activeWeekIdx >= weeks.length) activeWeekIdx = Math.max(0, weeks.length - 1);
+
+    var displayDates = (weeks[activeWeekIdx] && weeks[activeWeekIdx].dates) ? weeks[activeWeekIdx].dates : monthDatesKeys.slice(0, 6);
+
+    var custTracker = {};
+    rawApprovals.forEach(function(item) {
+      if (item.monthKey !== activeMonthKey) return;
+      if (displayDates.indexOf(item.dateKey) === -1) return;
+
+      var targetBP = bpMap[item.rNik];
+      if (!targetBP && item.rName) {
+        for (var bNik in bpMap) {
+          if (calculateNameSimilarity_(bpMap[bNik].name, item.rName) >= 0.90) {
+            targetBP = bpMap[bNik];
+            break;
+          }
+        }
+      }
+
+      if (targetBP) {
+        var dedupKey = item.dateKey + '_' + targetBP.nik + '_' + item.rCust;
+        if (!custTracker[dedupKey]) {
+          custTracker[dedupKey] = true;
+          targetBP.datesMap[item.dateKey] = (targetBP.datesMap[item.dateKey] || 0) + 1;
+        }
+      }
+    });
+
+    var resultMatrix = [];
+    for (var nikKey in bpMap) {
+      var bpItem = bpMap[nikKey];
+      var rowRecord = {
+        nik: bpItem.nik,
+        name: bpItem.name,
+        point: bpItem.point,
+        area: bpItem.area,
+        dailyStatus: {},
+        zonkCount: 0,
+        uk1Count: 0,
+        uk2Count: 0
+      };
+
+      displayDates.forEach(function(dt) {
+        var count = bpItem.datesMap[dt] || 0;
+        if (count === 0) {
+          rowRecord.dailyStatus[dt] = 'ZONK';
+          rowRecord.zonkCount++;
+        } else if (count === 1) {
+          rowRecord.dailyStatus[dt] = 'UK 1';
+          rowRecord.uk1Count++;
+        } else {
+          rowRecord.dailyStatus[dt] = 'UK >= 2 (' + count + ')';
+          rowRecord.uk2Count++;
+        }
+      });
+
+      resultMatrix.push(rowRecord);
+    }
+
+    return {
+      matrix: resultMatrix,
+      dates: displayDates,
+      allDates: monthDatesKeys,
+      months: monthsList,
+      selectedMonth: activeMonthKey,
+      weeks: weeks,
+      currentWeekIndex: activeWeekIdx
+    };
+  } catch (err) {
+    return { matrix: [], dates: [], allDates: [], months: [], selectedMonth: '', weeks: [], currentWeekIndex: 0 };
+  }
+}
+
+function getPerformaPencapaianSummary(userSession) {
+  try {
+    if (!userSession || !userSession.nik) {
+      return { status: 'error', message: 'Silakan login terlebih dahulu!' };
+    }
+
+    var parseNum = function(v) {
+      if (v === null || v === undefined) return 0;
+      if (typeof v === 'number') return v;
+      var str = String(v).replace(/[^-0-9.,]/g, '').trim();
+      if (!str) return 0;
+      if (str.indexOf(',') > -1 && str.indexOf('.') > -1) {
+        str = str.replace(/\./g, '').replace(',', '.');
+      } else if (str.indexOf(',') > -1) {
+        str = str.replace(',', '.');
+      }
+      var num = parseFloat(str);
+      return isNaN(num) ? 0 : num;
+    };
+
+    var pointRes = getRawDataWithHeaders_('pencapaianPoint');
+    var pointRows = pointRes.rows || [];
+    var pointList = [];
+
+    pointRows.forEach(function(r) {
+      var pt = r.point || r.branch || r['_raw_0'] || r['_raw_1'] || '';
+      var ar = r.area || r['_raw_1'] || r['_raw_2'] || '';
+      var achTotal = parseNum(r.achievmenttotal || r.achievementtotal || r['achtotal'] || r['_raw_14']);
+      var totalDisb = parseNum(r.totalplafond || r.totaldisb || r.total || r['_raw_9'] || r['_raw_10']);
+      var targetTotal = parseNum(r.targettotal || r.target || r['_raw_10'] || r['_raw_11']);
+      var rank = parseInt(r.ranking || r.rank || r['_raw_16'] || r['_raw_15'], 10) || 999;
+
+      if (pt && pt !== '-' && pt.toLowerCase() !== 'total') {
+        pointList.push({
+          point: pt,
+          area: ar,
+          achievmentTotal: achTotal,
+          totalPlafond: totalDisb,
+          targetTotal: targetTotal,
+          ranking: rank
+        });
+      }
+    });
+
+    pointList.sort(function(a, b) {
+      if (b.achievmentTotal !== a.achievmentTotal) {
+        return b.achievmentTotal - a.achievmentTotal;
+      }
+      return a.ranking - b.ranking;
+    });
+
+    var top5Point = pointList.slice(0, 5);
+    var bottom5Point = pointList.slice(Math.max(0, pointList.length - 5)).reverse();
+
+    var bpRes = getRawDataWithHeaders_('pencapaian');
+    var bpRows = bpRes.rows || [];
+    var bpList = [];
+
+    bpRows.forEach(function(r) {
+      var name = r.bpbm || r.bp || r.nama || r.namabp || r['_raw_1'] || '';
+      var nik = r.nik || r.nikbp || r['_raw_0'] || '';
+      var pt = r.point || r.branch || r['_raw_2'] || '';
+      var ar = r.area || r['_raw_3'] || '';
+      var achTotal = parseNum(r.achievmenttotal || r.achievementtotal || r['achtotal'] || r['_raw_14']);
+      var totalDisb = parseNum(r.totalplafond || r.totaldisb || r['_raw_10']);
+      var targetTotal = parseNum(r.target || r.targettotal || r['_raw_11']);
+      var rank = parseInt(r.ranking || r.rank || r['_raw_16'] || r['_raw_15'], 10) || 999;
+
+      if (name && name !== '-' && name.toLowerCase() !== 'total') {
+        bpList.push({
+          nik: nik,
+          name: name,
+          point: pt,
+          area: ar,
+          achievmentTotal: achTotal,
+          totalPlafond: totalDisb,
+          targetTotal: targetTotal,
+          ranking: rank
+        });
+      }
+    });
+
+    bpList.sort(function(a, b) {
+      if (b.achievmentTotal !== a.achievmentTotal) {
+        return b.achievmentTotal - a.achievmentTotal;
+      }
+      return a.ranking - b.ranking;
+    });
+
+    var top10BP = bpList.slice(0, 10);
+    var bottom10BP = bpList.slice(Math.max(0, bpList.length - 10)).reverse();
+
+    return {
+      status: 'success',
+      top5Point: top5Point,
+      bottom5Point: bottom5Point,
+      top10BP: top10BP,
+      bottom10BP: bottom10BP
+    };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
+}

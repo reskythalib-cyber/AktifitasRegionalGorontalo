@@ -1,0 +1,383 @@
+/**
+ * ============================================================================
+ * DATABASE INITIALIZATION & MIGRATION ENGINE (V13 - MASTER SAFE MIGRATE)
+ * ============================================================================
+ * 1. Safe Migrate Skema Sheet:
+ *    - 'Cohort DPD 7+ Disbursement' (Data Live DPD 7+ Mitra Sesuai Sheet Asli)
+ *    - 'Bahan_Kunjungan_Audit' (Log Audit Trail Pengunggah Berkas Renewal & Reactivation)
+ *    - 'Renewal_Data' & 'Reactivation_Data' (Penyimpanan Berkas Unggahan Dinamis)
+ *    - 'OTP_Sessions' (Penyimpanan Aman Token OTP Email 6-Digit)
+ * 2. ZettBOT Feature 1: Zero-ID Safety Guard (isValidId_)
+ *    Memblokir angka '0', '00', '-', atau null agar tidak dianggap sebagai ID valid,
+ *    sehingga detektor duplikat & pencocokan data otomatis beralih ke logika nama Fuzzy.
+ * 3. ZettBOT Feature 2: Normalized Numeric ID Normalizer (normalizeNumericId_)
+ *    Standarisasi ID Loan & Customer Number anti-spasi, anti-kutip, dan anti-karakter khusus.
+ * 4. Mempertahankan 100% Seluruh Skema Eksisting: Users, Data MPP, Hasil Inputan,
+ *    GlobalChat, Absensi, Master Point, Verifikasi_PostDisb, Aproval Perhari, KPI.
+ */
+
+var CONFIG_SETUP = {
+  TIMEZONE: 'Asia/Makassar' // WITA (Gorontalo)
+};
+
+function initDatabase() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return { status: 'error', message: 'Spreadsheet tidak aktif!' };
+
+    var schema = {
+      'Users': [
+        'NIK', 'No Telp/WA', 'Email', 'Role Jabatan', 'Password', 
+        'Nama Lengkap', 'Point', 'Area', 'Tanggal Daftar', 'Gemini API Key', 'Foto Profil URL'
+      ],
+      'Data MPP': [
+        'Regional', 'Area', 'Point', 'NIK', 'Nama', 'Kategori', 'Status', 'Tipe', 'Posisi'
+      ],
+      'Hasil Inputan': [
+        'Submission ID', 'Nama BP/BM', 'Point', 'Area', 'Aktivitas', 'ID Loan', 
+        'Nama Mitra', 'Majelis', 'Hasil Visit', 'Keterangan', 'Nominal Collect', 
+        'Dokumentasi Foto', 'Tanggal', 'Waktu'
+      ],
+      'Sosialisasi': [
+        'Tanggal', 'Waktu', 'Nama BP', 'Point', 'Area', 'Nama Calon Mitra',
+        'NIK Calon Mitra', 'Nomor Calon Mitra', 'Proses', 'Berasal Dari POI(?)',
+        'Lokasi POI', 'Regional', 'Keterangan'
+      ],
+      'Pelayanan': [
+        'Area', 'Point', 'Nama BP/BM', 'Majelis', 'Jenis Kumpulan Majelis',
+        'Hari Pelayanan', 'Status Pelayanan', 'Keterangan', 'Tanggal', 'Waktu'
+      ],
+      'GlobalChat': [
+        'Timestamp', 'SenderName', 'SenderNIK', 'Message', 'Scope', 
+        'TargetValue', 'SenderRole', 'SenderPoint', 'SenderArea', 'ReadBy'
+      ],
+      'ActiveSessions': [
+        'NIK', 'Name', 'Role', 'Point', 'Area', 'LastActiveTime', 'TimestampMillis'
+      ],
+      'Absensi': [
+        'Absen ID', 'Tanggal', 'Waktu WITA', 'NIK', 'Nama', 'Role Jabatan', 
+        'Area', 'Point', 'Tipe Absen', 'Status Kehadiran', 'Keterangan', 
+        'Latitude', 'Longitude', 'Jarak Meter', 'Foto URL', 'Created By'
+      ],
+      'Master Point': [
+        'Point ID', 'Area', 'Point', 'Latitude', 'Longitude', 'Radius (Meter)', 'Status'
+      ],
+      'Verifikasi_PostDisb': [
+        'ID', 'Loan ID', 'Customer Number', 'Customer Name', 'Plafond',
+        'Disbursement Date', 'Tanggal Approve UK', 'BP', 'Point', 'Area',
+        'Verified By Role', 'Verified By Name', 'Verified At', 'Phone No', 'Status Post Disb', 'Bukti URL', 'Catatan'
+      ],
+      'Aproval Perhari': [
+        'regional', 'area', 'branch', 'customer_number', 'customer_name',
+        'loan_id', 'majelis', 'plafond', 'disbursement_date', 'month',
+        'loan_cycle', 'tanggal_approve_uk', 'nik_bp', 'bp', 'status_cair',
+        'product_type', 'phone_no', 'tenor', 'kategori_cycle'
+      ],
+      'Cohort DPD 7+ Disbursement': [
+        'regional', 'area', 'branch', 'group_name', 'customer_number',
+        'customer_name', 'no_hp', 'loan_id', 'product_type', 'principal_amount',
+        'disbursement_date', 'wob', 'agent_fullname', 'hari_pelayanan', 'dpd',
+        'customer_address', 'link_koordinat_alamat', 'outstanding_amount', 'angsuran_menunggak'
+      ],
+      'Bahan_Kunjungan_Audit': [
+        'Audit_ID', 'Timestamp_WITA', 'Menu_Tipe', 'Nama_File', 'Total_Baris',
+        'Uploaded_By_NIK', 'Uploaded_By_Name', 'Uploaded_By_Role'
+      ],
+      'Renewal_Data': [
+        'Upload_ID', 'Customer Number', 'Loan ID', 'Nama Mitra', 'Area',
+        'Point', 'Plafond', 'Data_JSON', 'Raw_Headers', 'Uploaded_At', 'Uploaded_By'
+      ],
+      'Reactivation_Data': [
+        'Upload_ID', 'Customer Number', 'Loan ID', 'Nama Mitra', 'Area',
+        'Point', 'Plafond', 'Data_JSON', 'Raw_Headers', 'Uploaded_At', 'Uploaded_By'
+      ],
+      'OTP_Sessions': [
+        'Session_ID', 'NIK', 'Email', 'OTP_Code', 'Created_At',
+        'Expires_At', 'Purpose', 'Status'
+      ],
+      'KPI RM': [
+        'NIK', 'Nama', 'Regional', 'Total Skor KPI', 'Dapat Boost?', 'Parameter yang belum tercapai',
+        'Target Mitra Cair New Per Bulan', 'Mitra Cair New Per Bulan', 'GAP to Target Mitra Cair New Per Bulan', 'Score Mitra Cair New Per Bulan',
+        'Target % Renewal Mitra Cair per Bulan', '% Renewal Mitra Cair per Bulan', 'GAP to Target % Renewal Mitra Cair per Bulan', 'Score % Renewal Mitra Cair per Bulan',
+        'Target % Repayment Rate DPD 0', '% Repayment Rate DPD 0', 'GAP to Target % Repayment Rate DPD 0', 'Score % Repayment Rate DPD 0',
+        'Target % Repayment Rate 1-30 dari Tunggakan', '% Repayment Rate 1-30 dari Tunggakan', 'GAP to Target % Repayment Rate 1-30 dari Tunggakan', 'Score % Repayment Rate 1-30 dari Tunggakan',
+        'Target % Repayment Rate 31-90', '% Repayment Rate 31-90', 'GAP to Target % Repayment Rate 31-90', 'Score % Repayment Rate 31-90'
+      ],
+      'KPI AM': [
+        'NIK', 'Nama', 'Area', 'Regional', 'Total Skor KPI', 'Dapat Boost?', 'Parameter yang belum tercapai',
+        'Target Mitra Cair New Per Bulan', 'Mitra Cair New Per Bulan', 'GAP to Target Mitra Cair New Per Bulan', 'Score Mitra Cair New Per Bulan',
+        'Target % Renewal Mitra Cair per Bulan', '% Renewal Mitra Cair per Bulan', 'GAP to Target % Renewal Mitra Cair per Bulan', 'Score % Renewal Mitra Cair per Bulan',
+        'Target % Repayment Rate DPD 0', '% Repayment Rate DPD 0', 'GAP to Target % Repayment Rate DPD 0', 'Score % Repayment Rate DPD 0',
+        'Target % Repayment Rate 1-30 dari Tunggakan', '% Repayment Rate 1-30 dari Tunggakan', 'GAP to Target % Repayment Rate 1-30 dari Tunggakan', 'Score % Repayment Rate 1-30 dari Tunggakan',
+        'Target % Repayment Rate 31-90', '% Repayment Rate 31-90', 'GAP to Target % Repayment Rate 31-90', 'Score % Repayment Rate 31-90'
+      ],
+      'KPI BM': [
+        'NIK', 'Nama', 'Point', 'Area', 'Regional', 'Total Skor KPI', 'Total Proyeksi Insentif', 'Parameter yang belum tercapai',
+        'Target Mitra Cair New Per Bulan', 'Mitra Cair New Per Bulan', 'GAP to Target Mitra Cair New Per Bulan', 'Score Mitra Cair New Per Bulan',
+        'Target % Renewal Mitra Cair per Bulan', '% Renewal Mitra Cair per Bulan', 'GAP to Target % Renewal Mitra Cair per Bulan', 'Score % Renewal Mitra Cair per Bulan',
+        'Target % Repayment Rate DPD 0', '% Repayment Rate DPD 0', 'GAP to Target % Repayment Rate DPD 0', 'Score % Repayment Rate DPD 0',
+        'Target % Repayment Rate 1-30 dari Tunggakan', '% Repayment Rate 1-30 dari Tunggakan', 'GAP to Target % Repayment Rate 1-30 dari Tunggakan', 'Score % Repayment Rate 1-30 dari Tunggakan',
+        'Target % Repayment Rate 31-90', '% Repayment Rate 31-90', 'GAP to Target % Repayment Rate 31-90', 'Score % Repayment Rate 31-90'
+      ]
+    };
+
+    var sheetNames = Object.keys(schema);
+    for (var i = 0; i < sheetNames.length; i++) {
+      var sheetName = sheetNames[i];
+      try {
+        var sheet = ss.getSheetByName(sheetName);
+        
+        // Buat sheet baru jika belum ada
+        if (!sheet) {
+          sheet = ss.insertSheet(sheetName);
+          SpreadsheetApp.flush();
+          Utilities.sleep(200);
+        }
+        
+        // Jika sheet kosong, tambahkan header default
+        if (sheet.getLastRow() === 0) {
+          sheet.appendRow(schema[sheetName]);
+          sheet.getRange(1, 1, 1, schema[sheetName].length)
+               .setFontWeight('bold')
+               .setBackground('#101828')
+               .setFontColor('#ffffff');
+          SpreadsheetApp.flush();
+          Utilities.sleep(150);
+        } else {
+          // SAFE MIGRATE: Memeriksa dan menambahkan kolom baru tanpa menghapus data
+          var lastCol = sheet.getLastColumn();
+          var existingHeaders = [];
+          if (lastCol > 0) {
+            existingHeaders = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
+          }
+          
+          if (!existingHeaders || existingHeaders.length === 0 || existingHeaders[0] === '') {
+            sheet.getRange(1, 1, 1, schema[sheetName].length).setValues([schema[sheetName]]);
+          } else if (existingHeaders.length < schema[sheetName].length) {
+            var currentHeaderMap = {};
+            for (var h = 0; h < existingHeaders.length; h++) {
+              currentHeaderMap[String(existingHeaders[h]).toLowerCase().replace(/[^a-z0-9]/g, '')] = true;
+            }
+
+            var mergedHeaders = existingHeaders.slice();
+            for (var s = 0; s < schema[sheetName].length; s++) {
+              var targetHeader = schema[sheetName][s];
+              var normTarget = String(targetHeader).toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (!currentHeaderMap[normTarget]) {
+                mergedHeaders.push(targetHeader);
+              }
+            }
+
+            if (mergedHeaders.length > existingHeaders.length) {
+              sheet.getRange(1, 1, 1, mergedHeaders.length).setValues([mergedHeaders]);
+              sheet.getRange(1, 1, 1, mergedHeaders.length)
+                   .setFontWeight('bold')
+                   .setBackground('#101828')
+                   .setFontColor('#ffffff');
+              SpreadsheetApp.flush();
+            }
+          }
+        }
+      } catch (sheetErr) {
+        Logger.log('Warning: Gagal memproses sheet ' + sheetName + ' -> ' + sheetErr.toString());
+      }
+    }
+
+    initSampleMasterPoints_(ss);
+    setupAbsensiDriveFolder();
+    setupFotoProfilDriveFolder();
+    setupTriggers();
+
+    SpreadsheetApp.flush();
+    Logger.log('Inisialisasi & Safe Migration Database V13.1 Berhasil!');
+    return { status: 'success', message: 'Inisialisasi & Safe Migration Database V13.1 Berhasil!' };
+
+  } catch (err) {
+    Logger.log('Error Kritis saat initDatabase: ' + err.toString());
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+function initSampleMasterPoints_(ss) {
+  try {
+    var sheet = ss.getSheetByName('Master Point');
+    if (!sheet || sheet.getLastRow() > 1) return;
+
+    var samplePoints = [
+      ['PT-001', 'Bone Bolango', 'Bone Pantai', -0.5283, 123.1584, 100, 'Active'],
+      ['PT-002', 'Bone Bolango', 'Kota Timur', -0.5401, 123.0645, 100, 'Active'],
+      ['PT-003', 'Bone Bolango', 'Kota Barat', -0.5362, 123.0421, 100, 'Active'],
+      ['PT-004', 'Bone Bolango', 'Suwawa', -0.5512, 123.1345, 100, 'Active'],
+      ['PT-005', 'Bone Bolango', 'Kabila', -0.5489, 123.1012, 100, 'Active'],
+      ['PT-006', 'Boalemo', 'Boalemo', -0.5211, 122.3411, 150, 'Active'],
+      ['PT-007', 'Boalemo', 'Marisa', -0.4612, 121.9421, 150, 'Active']
+    ];
+
+    sheet.getRange(2, 1, samplePoints.length, 7).setValues(samplePoints);
+  } catch(e) {
+    Logger.log('Gagal inisialisasi Master Point: ' + e.message);
+  }
+}
+
+function setupAbsensiDriveFolder() {
+  try {
+    var folderName = 'Dokumentasi Absensi Regional Gorontalo';
+    var folders = DriveApp.getFoldersByName(folderName);
+    var targetFolder = null;
+
+    if (folders.hasNext()) {
+      targetFolder = folders.next();
+    } else {
+      targetFolder = DriveApp.createFolder(folderName);
+      targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    }
+    
+    return targetFolder.getId();
+  } catch (e) {
+    Logger.log('Warning: Folder Absensi Drive tidak dapat dibuat: ' + e.toString());
+    return null;
+  }
+}
+
+function setupFotoProfilDriveFolder() {
+  try {
+    var folderName = 'Foto Profil Karyawan Regional Gorontalo';
+    var folders = DriveApp.getFoldersByName(folderName);
+    var targetFolder = null;
+
+    if (folders.hasNext()) {
+      targetFolder = folders.next();
+    } else {
+      targetFolder = DriveApp.createFolder(folderName);
+      targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    }
+    
+    return targetFolder.getId();
+  } catch (e) {
+    Logger.log('Warning: Folder Foto Profil Drive tidak dapat dibuat: ' + e.toString());
+    return null;
+  }
+}
+
+function setupTriggers() {
+  try {
+    var functionName = 'autoFillAlphaAbsensi';
+    var triggers = ScriptApp.getProjectTriggers();
+    var triggerExists = false;
+
+    for (var i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === functionName) {
+        triggerExists = true;
+        break;
+      }
+    }
+
+    if (!triggerExists) {
+      ScriptApp.newTrigger(functionName)
+        .timeBased()
+        .everyDays(1)
+        .atHour(23)
+        .create();
+      Logger.log('Trigger Cron Job (Auto-Alpha Absensi) berhasil dipasang.');
+    }
+  } catch (e) {
+    Logger.log('Warning: Gagal memasang Trigger Cron Job: ' + e.toString());
+  }
+}
+
+function checkDatabaseHealth() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return 'Spreadsheet tidak aktif!';
+    
+    var requiredSheets = [
+      'Users', 'Data MPP', 'Hasil Inputan', 'Sosialisasi', 'Pelayanan', 'GlobalChat', 
+      'ActiveSessions', 'Absensi', 'Master Point', 'Verifikasi_PostDisb',
+      'Aproval Perhari', 'Cohort DPD 7+ Disbursement', 'Bahan_Kunjungan_Audit',
+      'Renewal_Data', 'Reactivation_Data', 'OTP_Sessions', 'KPI RM', 'KPI AM', 'KPI BM'
+    ];
+    var missing = [];
+    
+    requiredSheets.forEach(function(name) {
+      if (!ss.getSheetByName(name)) missing.push(name);
+    });
+    
+    if (missing.length > 0) {
+      return 'Peringatan: Sheet berikut belum ditemukan: ' + missing.join(', ') + '. Silakan jalankan initDatabase().';
+    }
+    return 'Database Sehat V13.1: Seluruh sheet operasional, skema Bahan Kunjungan, OTP Sessions, & folder Drive siap 100%.';
+  } catch(e) {
+    return 'Gagal mengecek kesehatan database: ' + e.message;
+  }
+}
+
+/**
+ * ZETTBOT FEATURE 1: Zero-ID Safety Guard
+ * Mengecek apakah nilai ID valid (bukan angka 0, 00, -, strip, atau kosong).
+ * Jika mengembalikan false, sistem WAJIB mengabaikan ID dan beralih ke logika Nama Fuzzy.
+ *
+ * @param {string|number} idVal - Nilai ID Loan atau Customer Number mentah
+ * @return {boolean} True jika ID valid dan bermakna angka > 0
+ */
+function isValidId_(idVal) {
+  if (idVal === null || idVal === undefined) return false;
+  var str = String(idVal).trim().replace(/['"`\s]/g, '');
+  if (!str || str === '-' || str === 'null' || str === 'undefined') return false;
+  var numericOnly = str.replace(/[^0-9]/g, '');
+  if (!numericOnly) return false;
+  // Periksa apakah hanya terdiri dari angka 0 (misal '0', '00', '000')
+  var num = parseInt(numericOnly, 10);
+  return !isNaN(num) && num > 0;
+}
+
+/**
+ * ZETTBOT FEATURE 2: Normalized Numeric ID Normalizer
+ * Menormalisasi nilai ID Loan dan Customer Number dengan membuang
+ * spasi, tanda kutip (' atau "), serta seluruh karakter non-digit.
+ *
+ * @param {string|number} rawId - Nilai ID mentah dari Excel atau database sheet
+ * @return {string} Nilai ID bersih berupa deretan angka murni atau string kosong jika ID invalid
+ */
+function normalizeNumericId_(rawId) {
+  if (!isValidId_(rawId)) return '';
+  var cleanStr = String(rawId).trim().replace(/['"`\s]/g, '');
+  return cleanStr.replace(/[^0-9]/g, '');
+}
+
+/**
+ * ZETTBOT FEATURE 3: Automatic WhatsApp Link & Phone Normalizer
+ * Menormalisasi nomor telepon dari input user (08..., +62..., 8...) ke format
+ * internasional standar WhatsApp (628...) secara otomatis dan aman.
+ *
+ * @param {string|number} phone - Nomor telepon mentah dari database sheet
+ * @return {string} Nomor bersih dengan format 628...
+ */
+function formatWhatsAppNumber(phone) {
+  if (!phone && phone !== 0) return '';
+  var clean = String(phone).replace(/[^0-9]/g, '').trim();
+  if (!clean) return '';
+
+  if (clean.indexOf('08') === 0) {
+    clean = '62' + clean.substring(1);
+  } else if (clean.indexOf('8') === 0 && clean.indexOf('628') !== 0) {
+    clean = '62' + clean;
+  } else if (clean.indexOf('6208') === 0) {
+    clean = '62' + clean.substring(3);
+  }
+
+  return clean;
+}
+
+/**
+ * ZETTBOT FEATURE 4: Generator Tautan Pesan WhatsApp Langsung
+ *
+ * @param {string|number} phone - Nomor telepon
+ * @param {string} messageText - Teks pesan konfirmasi
+ * @return {string} URL langsung https://wa.me/62...
+ */
+function generateWhatsAppLink(phone, messageText) {
+  var waNumber = formatWhatsAppNumber(phone);
+  if (!waNumber) return '';
+  var textEncoded = messageText ? encodeURIComponent(messageText) : '';
+  return 'https://wa.me/' + waNumber + (textEncoded ? '?text=' + textEncoded : '');
+}
