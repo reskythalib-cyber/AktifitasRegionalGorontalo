@@ -1,29 +1,1864 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
+  <base target="_top">
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Aktivitas Regional Gorontalo</title>
+
+  <!-- Tailwind CSS & Chart.js CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   
-  <title>"Aktifitas Regional Gorontalo"</title> 
+  <!-- Leaflet.js Maps CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- Library SheetJS untuk parsing Excel/WPS/CSV Murni Client-Side -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+  <!-- MODULAR COMPONENT: CSS STYLESHEET -->
+  <?!= include('css'); ?>
 
   <style>
-    body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden; /* Biar ga ada scrollbar */
-      background-color: #0d1117; /* Warna background gelap biar pas loading ga silau */
-    }
-    iframe {
-      border: none;
-      width: 100vw;
-      height: 100vh;
-      display: block;
+    .tr-plafond-warning { background-color: rgba(234, 88, 12, 0.08) !important; }
+    body.dark-mode .tr-plafond-warning { background-color: rgba(234, 88, 12, 0.16) !important; }
+    .tr-plafond-warning:hover { background-color: rgba(234, 88, 12, 0.14) !important; }
+    .badge-visit-count {
+      display: inline-block;
+      background: #ea580c;
+      color: #ffffff;
+      font-size: 9.5px;
+      font-weight: 850;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-left: 5px;
+      vertical-align: middle;
+      white-space: nowrap;
     }
   </style>
 </head>
 <body>
 
-  <iframe src="https://script.google.com/a/macros/amartha.com/s/AKfycbwBxzUSU2Nm9hU703bcCNMpQzAqKA13cpmItmV-q9tsdXEO9kIden2Q5NTR2XuQKcJ2oQ/exec"></iframe>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="window.toggleSidebar()"></div>
 
+<div id="chatNotifToast" class="chat-notif-toast" onclick="window.toggleChatBox(); document.getElementById('chatNotifToast').classList.remove('show');">
+  <div style="font-size:11px; font-weight:800; color:#1d4ed8; margin-bottom:4px;">💬 Pesan Baru dari <span id="chatNotifSender"></span></div>
+  <div id="chatNotifMsg" style="font-size:11px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+</div>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <!-- LOGO RESMI UNGU REGIONAL GORONTALO DENGAN SAFEGUARD FALLBACK -->
+      <img id="brandLogo" 
+           src="https://i.ibb.co/xL1QxKj/Regional-gorontalo.jpg" 
+           alt="Regional Gorontalo" 
+           class="brand-logo" 
+           onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'220\' height=\'60\' viewBox=\'0 0 220 60\'><defs><linearGradient id=\'bg\' x1=\'0%\' y1=\'0%\' x2=\'100%\' y2=\'100%\'><stop offset=\'0%\' stop-color=\'%233b0764\'/><stop offset=\'50%\' stop-color=\'%236b21a8\'/><stop offset=\'100%\' stop-color=\'%232e1065\'/></linearGradient></defs><rect width=\'220\' height=\'60\' rx=\'12\' fill=\'url(%23bg)\'/><text x=\'110\' y=\'25\' fill=\'%23c084fc\' font-family=\'Inter,sans-serif\' font-size=\'10\' font-weight=\'900\' letter-spacing=\'2.5\' text-anchor=\'middle\'>REGIONAL</text><text x=\'110\' y=\'47\' fill=\'%23ffffff\' font-family=\'Inter,sans-serif\' font-size=\'18\' font-weight=\'900\' letter-spacing=\'1.2\' text-anchor=\'middle\'>GORONTALO</text></svg>';">
+      <button class="brand-close-btn" onclick="window.toggleSidebar()">✕</button>
+    </div>
+
+    <div class="sidebar-profile-card" id="sidebarProfileCard" style="display:none;">
+      <div class="avatar-container">
+        <img id="sidebarAvatarImg" class="user-avatar-circle" src="" alt="Avatar" style="display:none;" />
+        <div id="sidebarAvatarInitial" class="user-avatar-initial">U</div>
+        <div class="avatar-status-badge" title="Status: Online"></div>
+      </div>
+      <div class="sidebar-user-name" id="sidebarUserName">Nama Karyawan</div>
+      <div class="sidebar-user-role" id="sidebarUserRole">1-RM</div>
+      <div class="sidebar-user-location" id="sidebarUserLocation">
+        <span>📍</span> <span id="sidebarUserPointArea">Point - Area</span>
+      </div>
+      <div class="sidebar-user-actions">
+        <button type="button" class="sidebar-btn-edit" onclick="window.openAuthModal('settings')">✏️ Edit Profil</button>
+        <button type="button" class="sidebar-btn-logout" onclick="window.requestLogout()">🚪 Logout</button>
+      </div>
+    </div>
+
+    <!-- ABSENSI REGIONAL -->
+    <div class="section-title" id="secAbsenTitle" style="display:none;" data-i18n="sec_absensi">Absensi Regional</div>
+    <div class="menu" id="menuAbsenReal" style="display:none;" data-key="absensi" onclick="window.openMenu('absensi', this)">
+      <div class="menu-icon">📍</div> <span data-i18n="menu_absen_real">Absensi Real-time</span>
+    </div>
+    <div class="menu" id="menuLapAbsen" style="display:none;" data-key="laporanAbsensi" onclick="window.openMenu('laporanAbsensi', this)">
+      <div class="menu-icon">📊</div> <span data-i18n="menu_lap_absen">Laporan Absensi</span>
+    </div>
+
+    <!-- MONITORING -->
+    <div class="section-title" data-i18n="sec_monitoring">Monitoring</div>
+    <div class="menu active" data-key="dashboard" onclick="window.openMenu('dashboard', this)">
+      <div class="menu-icon">D</div> <span data-i18n="menu_dashboard">Dashboard</span>
+    </div>
+
+    <div class="menu" id="menuMonitoringGD" style="display:none;" data-key="monitoringGD" onclick="window.openMenu('monitoringGD', this)">
+      <div class="menu-icon" style="background:#0284c7; color:white;">GD</div> 
+      <span data-i18n="menu_monitoring_gd">Monitoring GD</span>
+    </div>
+
+    <!-- SUBMENU ACCORDION: LOAN PAID -->
+    <div id="loanPaidAccordionHeader" class="menu" style="display:none; justify-content:space-between; margin-bottom:0;" onclick="window.toggleLoanPaidSubmenu()">
+      <div style="display:flex; align-items:center; gap:11px;">
+        <div class="menu-icon" style="background:#16a34a; color:white;">LP</div> 
+        <span data-i18n="menu_lp">Loan Paid</span>
+      </div>
+      <span id="loanPaidAccordionArrow" style="font-size:10px;">▼</span>
+    </div>
+
+    <div class="submenu-container" id="loanPaidSubmenuContainer" style="display:none;">
+      <div class="menu" id="menuLoanPaidPoint" style="display:none;" data-key="loanPaidPoint" onclick="window.openMenu('loanPaidPoint', this)">
+        <div class="menu-icon" style="background:#16a34a; color:white;">LP</div> 
+        <span data-i18n="menu_lp_point">Loan Paid Point</span>
+      </div>
+      <div class="menu" id="menuLoanPaidArea" style="display:none;" data-key="loanPaidArea" onclick="window.openMenu('loanPaidArea', this)">
+        <div class="menu-icon" style="background:#7c3aed; color:white;">LA</div> 
+        <span data-i18n="menu_lp_area">Loan Paid Area</span>
+      </div>
+      <div class="menu" id="menuLoanPaidRegional" style="display:none;" data-key="loanPaidRegional" onclick="window.openMenu('loanPaidRegional', this)">
+        <div class="menu-icon" style="background:#ea580c; color:white;">LR</div> 
+        <span data-i18n="menu_lp_regional">Loan Paid Regional</span>
+      </div>
+    </div>
+
+    <!-- SUBMENU ACCORDION: KPI -->
+    <div id="kpiAccordionHeader" class="menu" style="display:flex; justify-content:space-between; margin-bottom:0;" onclick="window.toggleKpiSubmenu()">
+      <div style="display:flex; align-items:center; gap:11px;">
+        <div class="menu-icon">KPI</div> <span data-i18n="menu_performa_kpi">Performa KPI</span>
+      </div>
+      <span id="kpiAccordionArrow" style="font-size:10px;">▼</span>
+    </div>
+    
+    <div class="submenu-container" id="kpiSubmenuContainer" style="display:none;">
+      <div class="menu" id="menuKpiRM" data-key="kpiRM" onclick="window.openMenu('kpiRM', this)">
+        <div class="menu-icon">R</div> KPI RM
+      </div>
+      <div class="menu" id="menuKpiAM" data-key="kpiAM" onclick="window.openMenu('kpiAM', this)">
+        <div class="menu-icon">A</div> KPI AM
+      </div>
+      <div class="menu" id="menuKpiBM" data-key="kpiBM" onclick="window.openMenu('kpiBM', this)">
+        <div class="menu-icon">M</div> KPI BM
+      </div>
+      <div class="menu" id="menuKpiBP" data-key="kpi" onclick="window.openMenu('kpi', this)">
+        <div class="menu-icon">P</div> KPI BP
+      </div>
+    </div>
+
+    <!-- PENCAPAIAN & APPROVAL -->
+    <div class="section-title" data-i18n="sec_pencapaian">Pencapaian & Approval</div>
+    <div class="menu" id="menuPencapaianArea" data-key="pencapaianArea" onclick="window.openMenu('pencapaianArea', this)">
+      <div class="menu-icon">PA</div> <span data-i18n="menu_pencapaian_area">Pencapaian Area</span>
+    </div>
+    <div class="menu" id="menuPencapaianPoint" data-key="pencapaianPoint" onclick="window.openMenu('pencapaianPoint', this)">
+      <div class="menu-icon">PP</div> <span data-i18n="menu_pencapaian_point">Pencapaian Point</span>
+    </div>
+    <div class="menu" id="menuPencapaianBP" data-key="pencapaian" onclick="window.openMenu('pencapaian', this)">
+      <div class="menu-icon">PC</div> <span data-i18n="menu_pencapaian_bp">Pencapaian BP</span>
+    </div>
+    <div class="menu" id="menuPerformaPencapaian" data-key="performaPencapaian" onclick="window.openMenu('performaPencapaian', this)">
+      <div class="menu-icon" style="background:#f59e0b; color:white;">🏆</div> <span data-i18n="menu_performa_pencapaian">Performa Pencapaian</span>
+    </div>
+    <div class="menu" id="menuApprovalPerhari" data-key="approvalPerhari" onclick="window.openMenu('approvalPerhari', this)">
+      <div class="menu-icon">AP</div> KP Daily
+    </div>
+
+    <div class="menu" id="menuPerformaKpWeek" style="display:none;" data-key="performaKpWeek" onclick="window.openMenu('performaKpWeek', this)">
+      <div class="menu-icon" style="background:#059669; color:white;">PW</div> 
+      <span>Performa KP Per Week</span>
+    </div>
+
+    <!-- SUBMENU ACCORDION BAHAN KUNJUNGAN -->
+    <div class="section-title">Bahan Kunjungan</div>
+    <div id="bahanKunjunganAccordionHeader" class="menu" style="display:flex; justify-content:space-between; margin-bottom:0;" onclick="window.toggleBahanKunjunganSubmenu()">
+      <div style="display:flex; align-items:center; gap:11px;">
+        <div class="menu-icon" style="background:#2563eb; color:white;">BK</div> 
+        <span>Bahan Kunjungan</span>
+      </div>
+      <span id="bahanKunjunganAccordionArrow" style="font-size:10px;">▼</span>
+    </div>
+
+    <div class="submenu-container" id="bahanKunjunganSubmenuContainer" style="display:none;">
+      <div class="menu" id="menuCohort7" data-key="cohort7" onclick="window.openMenu('cohort7', this)">
+        <div class="menu-icon" style="background:#ef4444; color:white;">W6+</div> 
+        <span>WOB 6+</span>
+      </div>
+      <div class="menu" id="menuRenewal" data-key="renewal" onclick="window.openMenu('renewal', this)">
+        <div class="menu-icon" style="background:#10b981; color:white;">ML</div> 
+        <span>Master Leads</span>
+      </div>
+    </div>
+
+    <!-- AKTIVITAS -->
+    <div class="section-title" data-i18n="sec_aktivitas">Aktivitas</div>
+    <div class="menu" id="menuPostDisb" style="display:none;" data-key="postDisb" onclick="window.openMenu('postDisb', this)">
+      <div class="menu-icon" style="background:#16a34a; color:white;">PD</div> 
+      <span data-i18n="menu_post_disb">Konfirmasi Post Disb</span>
+      <span class="menu-badge" id="postDisbBadge" style="display:none;">0</span>
+    </div>
+
+    <div class="menu" data-key="pelayanan" onclick="window.openMenu('pelayanan', this)">
+      <div class="menu-icon">P</div> <span data-i18n="menu_pelayanan">Pelayanan</span>
+    </div>
+    <div class="menu" data-key="sosialisasi" onclick="window.openMenu('sosialisasi', this)">
+      <div class="menu-icon">S</div> <span data-i18n="menu_sosialisasi">Sosialisasi</span>
+    </div>
+    <div class="menu" data-key="kunjunganWL" onclick="window.openMenu('kunjunganWL', this)">
+      <div class="menu-icon">E</div> <span data-i18n="menu_eligible">Kunjungan Eligible</span>
+    </div>
+    <div class="menu" data-key="kunjunganDO" onclick="window.openMenu('kunjunganDO', this)">
+      <div class="menu-icon">DO</div> <span data-i18n="menu_do">Kunjungan DO</span>
+    </div>
+    <div class="menu" data-key="newPar" onclick="window.openMenu('newPar', this)">
+      <div class="menu-icon">N</div> <span data-i18n="menu_newpar">Kunjungan New Par</span>
+    </div>
+    <div class="menu" data-key="dpd830" onclick="window.openMenu('dpd830', this)">
+      <div class="menu-icon">8</div> <span data-i18n="menu_dpd130">Kunjungan Mitra DPD 8-30</span>
+    </div>
+    <div class="menu" data-key="dpd3160" onclick="window.openMenu('dpd3160', this)">
+      <div class="menu-icon">31</div> <span data-i18n="menu_dpd3160">Kunjungan Mitra DPD 31-60</span>
+    </div>
+    <div class="menu" data-key="dpd6190" onclick="window.openMenu('dpd6190', this)">
+      <div class="menu-icon">61</div> <span data-i18n="menu_dpd6190">Kunjungan Mitra DPD 61-90</span>
+    </div>
+    <div class="menu" data-key="wob" onclick="window.openMenu('wob', this)">
+      <div class="menu-icon">W</div> <span data-i18n="menu_wob">Kunjungan WOB</span>
+    </div>
+    <div class="menu" id="menuValidasi" data-key="validasi" onclick="window.openMenu('validasi', this)">
+      <div class="menu-icon">V</div> <span data-i18n="menu_validasi">Validasi UK/Modal BM</span>
+    </div>
+    <div class="menu" id="menuSuprise" data-key="suprise" onclick="window.openMenu('suprise', this)">
+      <div class="menu-icon">SV</div> <span data-i18n="menu_suprise">Suprise Visit</span>
+    </div>
+
+    <!-- PELACAKAN -->
+    <div class="section-title tracking-menu" style="display:none;" data-i18n="sec_pelacakan">Pelacakan</div>
+    <div class="menu tracking-menu" id="menuTrackingMaps" style="display:none;" data-key="trackingMaps" onclick="window.openMenu('trackingMaps', this)">
+      <div class="menu-icon" style="background:#10b981; color:white;">🗺️</div> <span data-i18n="menu_tracking">Lokasi Terakhir BP</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <!-- LOADING BAR TOOLBAR RAMPING -->
+      <div class="topbar-progress-container" id="topbarProgressContainer">
+        <div class="topbar-progress-bar" id="topbarProgressBar"></div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button style="border:0;background:transparent;font-size:22px;cursor:pointer;color:var(--text-main);" onclick="window.toggleSidebar()">☰</button>
+        <div class="top-title" data-i18n="top_app_title">Monitoring Aktivitas Regional Gorontalo</div>
+        <div class="toolbar-progress-status" id="toolbarProgressStatus">
+          <span>⚡</span> <span id="toolbarProgressStatusText">Menyiapkan data...</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div id="topOnlineBadge" class="user-badge" style="display:none;background:#dcfce7;color:#15803d;border-color:#86efac;position:relative;gap:4px;" onclick="window.toggleTopOnlinePopup()" title="Klik untuk Lihat User Aktif Online">
+          🟢&nbsp;<span id="topOnlineCount">0</span>&nbsp;<span data-i18n="online_txt">Online</span>
+          <div class="top-online-popup" id="topOnlinePopup" onclick="event.stopPropagation();"></div>
+        </div>
+
+        <button id="topSettingBtn" class="top-setting-btn" onclick="window.openSettingsModal()" title="Buka Pengaturan Terpadu">
+          <span>⚙️</span> <span id="topSettingLabel" data-i18n="settings_btn">Pengaturan</span>
+        </button>
+
+        <button id="authBtn" class="auth-btn" onclick="window.openAuthModal('login')">🔒 Login</button>
+        <button class="refresh" onclick="window.loadCurrentData(true)">
+          <span data-i18n="refresh_btn">↻ Refresh Data</span>
+          <span id="refreshTimeAgo" style="font-size:9.5px; opacity:0.8; margin-left:4px;">(Baru saja)</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="content menu-transition-in" id="mainContentSection">
+      <div class="eyebrow" data-i18n="eyebrow_txt">DASHBOARD MONITORING</div>
+      <div class="page-title" id="pageTitle">Dashboard</div>
+      <div class="page-description" id="pageDescription">Data laporan performa & aktivitas dari sheet terkait.</div>
+
+      <div id="lastUpdateBadge" class="last-update-badge" style="display:none;">
+        <span>🕒</span> <span id="lastUpdateText">Terakhir Diperbarui: -</span>
+      </div>
+
+      <div class="guest-banner" id="guestBanner">
+        <div id="guestBannerText">
+          👋 <strong>Selamat datang!</strong> Saat ini Anda mengakses Dashboard Summary.
+          Silakan <strong>Login</strong> untuk membuka seluruh data detail transaksi dan menu aktivitas.
+        </div>
+        <button class="auth-btn" id="guestBannerAuthBtn" onclick="window.openAuthModal('login')" data-i18n="login_account_btn">Login Akun</button>
+      </div>
+
+      <!-- ABSENSI CONTAINER -->
+      <div id="absensiBox" class="absensi-container" style="display:none;">
+        <div id="absenAlreadyRecordedBanner" style="display:none;background:#fee2e2;border:2px solid #ef4444;color:#991b1b;padding:16px;border-radius:12px;margin-bottom:20px;font-weight:800;text-align:center;font-size:14px;">
+          🛑 Anda sudah absen hari ini, Terima Kasih!
+        </div>
+
+        <div id="absenExcludedNotice" style="display:none;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:10px;margin-bottom:15px;font-size:11px;font-weight:700;">
+          ⚠️ Perhatian: Anda tidak masuk dalam daftar centang Absen Kelompok hari ini. Pilihan Absen Kelompok disembunyikan dan dialihkan ke Absen Individu.
+        </div>
+
+        <div class="absensi-toggle-group" id="absensiToggleGroup">
+          <button id="btnAbsenIndividu" class="absensi-toggle-btn active" onclick="window.switchAbsenType('Individu')">👤 Absen Individu</button>
+          <button id="btnAbsenKelompok" class="absensi-toggle-btn" onclick="window.switchAbsenType('Kelompok')">👥 Absen Kelompok</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:20px;" id="absensiFormControls">
+          <div style="text-align:center;">
+            <div style="font-size:12px;font-weight:800;color:var(--text-muted);margin-bottom:10px;">DOKUMENTASI FOTO & GPS GEOFENCING</div>
+
+            <div id="pointRequiredNotice" style="background:#fef2f2; border:1px solid #fca5a5; color:#991b1b; padding:9px 12px; border-radius:10px; font-size:11px; font-weight:750; margin-bottom:12px; text-align:left; display:flex; align-items:center; gap:6px;">
+              <span>⚠</span> <span>Wajib pilih <strong>Point Master</strong> di samping kanan sebelum mengambil foto presensi!</span>
+            </div>
+            
+            <div class="camera-box">
+              <video id="absensiVideo" class="camera-video" autoplay playsinline></video>
+              <img id="absensiPhotoPreview" class="camera-preview-img" alt="Preview Foto Absen" />
+              <canvas id="absensiCanvas" style="display:none;"></canvas>
+            </div>
+
+            <div style="display:flex;gap:8px;justify-content:center;margin-bottom:15px;flex-wrap:wrap;">
+              <button id="btnStartCam" class="auth-btn" style="background:#0f172a;" onclick="window.startCamera()" disabled>📷 Buka Live Kamera</button>
+              <button id="btnTakeCam" class="auth-btn" style="background:#1d4ed8;display:none;" onclick="window.takePhoto()">📸 Ambil Foto</button>
+              <button id="btnRetakeCam" class="auth-btn" style="background:#64748b;display:none;" onclick="window.retakePhoto()">🔄 Ulangi Foto</button>
+            </div>
+
+            <div id="nativeCamHighlight" style="margin-bottom:15px;background:rgba(29, 78, 216, 0.05);padding:12px;border-radius:10px;border:1px dashed #1d4ed8;text-align:center;">
+              <label style="font-size:11px;color:#1d4ed8;font-weight:800;display:block;margin-bottom:6px;">📸 Atau Ambil Foto Langsung via Kamera HP</label>
+              <input type="file" id="cameraFileInput" accept="image/*" capture="user" style="font-size:11px;width:100%;cursor:pointer;" onchange="window.handleFileInputPhoto(event)" disabled />
+            </div>
+
+            <div style="border-top:1px solid var(--border-color);padding-top:12px;">
+              <button class="refresh" style="width:100%;font-weight:800;background:#101828;color:white;" onclick="window.getGpsLocation()">📍 Cek Lokasi GPS Saya</button>
+              <div id="geoStatusBadge" class="geo-status-badge danger">⚠️ Belum Cek Lokasi GPS</div>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:12px;font-weight:800;color:var(--text-muted);margin-bottom:10px;">DETAIL LOKASI & ANGGOTA</div>
+
+            <div class="modal-group">
+              <label>Pilih Point Lokasi Absensi * (Wajib Dipilih Pertama)</label>
+              <select id="absenPointSelect" onchange="window.onAbsenPointChanged()">
+                <option value="">-- Pilih Point Master --</option>
+              </select>
+            </div>
+
+            <div id="individuFormSection">
+              <div class="modal-group">
+                <label>Status Kehadiran Hari Ini</label>
+                <select id="absenStatusSelect" onchange="window.onAbsenStatusChange()">
+                  <option value="Hadir">🟢 Hadir</option>
+                  <option value="Izin">🔵 Izin</option>
+                  <option value="Sakit">🔴 Sakit</option>
+                </select>
+                <div id="absenTimeWindowInfo" style="font-size:10px;color:var(--text-muted);margin-top:4px;">
+                  *Batas Hadir Tepat Waktu: BP, BPR, BM (07:45 WITA), AM & RM (08:00 WITA). Status Izin & Sakit s/d 15:30 WITA (Bypass Geofencing). Hari Sabtu bebas jam absen!
+                </div>
+              </div>
+
+              <div class="modal-group">
+                <label>Keterangan / Catatan Tambahan (Opsional)</label>
+                <input type="text" id="absenRemarksInput" placeholder="Contoh: Sakit flu / Izin urusan keluarga..." />
+              </div>
+            </div>
+
+            <div id="kelompokFormSection" style="display:none;">
+              <div style="font-weight:850;font-size:11px;color:var(--text-muted);margin-bottom:8px;">DAFTAR BP / PETUGAS DI POINT (OTOMATIS TERCENANG, HAPUS CENTANG JIKA TIDAK HADIR)</div>
+              <div style="max-height:250px;overflow-y:auto;border:1px solid var(--border-color);border-radius:10px;padding:8px;" id="kelompokMemberList">
+                <div style="text-align:center;color:var(--text-muted);font-size:11px;padding:15px;">Pilih Point terlebih dahulu.</div>
+              </div>
+            </div>
+
+            <button id="btnSubmitAbsensi" class="submit-btn" style="margin-top:15px;height:46px;font-size:14px;background:#16a34a;" onclick="window.submitAbsensiForm()">
+              <span>💾 Submit & Simpan Absensi</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- LAPORAN SUMMARY ABSENSI -->
+      <div id="laporanAbsensiBox" class="table-box" style="display:none;padding:20px;">
+        <div id="printHeaderWatermark" class="print-header-watermark" style="display:none; margin-bottom:15px; border-bottom:2px solid #0f172a; padding-bottom:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div>
+              <div style="font-size:15pt; font-weight:900; color:#0f172a;">PT AMARTHA MIKRO FINTEK</div>
+              <div style="font-size:10.5pt; font-weight:750; color:#334155; margin-top:2px;">Regional Gorontalo • Rekapitulasi Presensi Kehadiran Personil</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:8.5pt; color:#64748b;" id="printDateWatermark">Dicetak: -</div>
+              <div style="font-size:8.5pt; font-weight:800; color:#0f172a; margin-top:2px;">Dokumen Operasional Resmi</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;flex-wrap:wrap;gap:10px;">
+          <div>
+            <div style="font-weight:850;font-size:16px;">Rekap Summary Absensi Regional</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Akumulasi total kehadiran per personil dengan riwayat status per tanggal dan catatan keterangan</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button type="button" class="btn-print-rekap" onclick="window.printAbsensiSummary()" title="Cetak Rekap Absensi">
+              <span>🖨️</span> <span data-i18n="print_btn">Cetak Rekap</span>
+            </button>
+            <button type="button" class="btn-download-csv" onclick="window.exportAbsensiSummaryCSV()" title="Download Excel/CSV Rekap Absensi">
+              <span>📥</span> <span data-i18n="download_excel_btn">Download Data</span>
+            </button>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)) auto; gap:8px; align-items:end; background:rgba(0,0,0,0.02); padding:12px; border-radius:10px; border:1px solid var(--border-color); margin-bottom:15px;">
+          <div id="lapFilterAreaCol" style="display:none;">
+            <label style="font-size:10px; font-weight:750; color:var(--text-muted); display:block; margin-bottom:4px;">Filter Area</label>
+            <select id="lapFilterArea" style="height:36px; font-size:11px;" onchange="window.onLapAreaFilterChange()">
+              <option value="">Semua Area</option>
+            </select>
+          </div>
+          <div id="lapFilterPointCol" style="display:none;">
+            <label style="font-size:10px; font-weight:750; color:var(--text-muted); display:block; margin-bottom:4px;">Filter Point</label>
+            <select id="lapFilterPoint" style="height:36px; font-size:11px;" onchange="window.onLapPointFilterChange()">
+              <option value="">Semua Point</option>
+            </select>
+          </div>
+          <div id="lapFilterBpCol">
+            <label style="font-size:10px; font-weight:750; color:var(--text-muted); display:block; margin-bottom:4px;">Filter Nama BP</label>
+            <input type="text" id="lapFilterBP" placeholder="Cari nama BP..." style="height:36px; font-size:11px;" oninput="window.loadAbsensiSummaryReport()" />
+          </div>
+          <div>
+            <label style="font-size:10px; font-weight:750; color:var(--text-muted); display:block; margin-bottom:4px;">Bulan</label>
+            <select id="lapMonthSelect" class="month-select-pill" style="height:36px; width:100%;" onchange="window.loadAbsensiSummaryReport()">
+              <option value="all">Semua Bulan</option>
+              <option value="1">Januari</option><option value="2">Februari</option><option value="3">Maret</option>
+              <option value="4">April</option><option value="5">Mei</option><option value="6">Juni</option>
+              <option value="7">Juli</option><option value="8">Agustus</option><option value="9">September</option>
+              <option value="10">Oktober</option><option value="11">November</option><option value="12">Desember</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:10px; font-weight:750; color:var(--text-muted); display:block; margin-bottom:4px;">Dari Tanggal</label>
+            <input type="date" id="lapDateFrom" style="height:36px;font-size:11px;" onchange="window.loadAbsensiSummaryReport()" />
+          </div>
+          <div>
+            <label style="font-size:10px; font-weight:750; color:var(--text-muted); display:block; margin-bottom:4px;">Sampai Tanggal</label>
+            <input type="date" id="lapDateTo" style="height:36px;font-size:11px;" onchange="window.loadAbsensiSummaryReport()" />
+          </div>
+          <div>
+            <button class="auth-btn" style="background:#1d4ed8;height:36px;padding:0 14px;" onclick="window.loadAbsensiSummaryReport()">Cari Rekap</button>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>NAMA BP / USER</th>
+                <th>ROLE</th>
+                <th>POINT</th>
+                <th>AREA</th>
+                <th style="color:#16a34a;">HADIR</th>
+                <th style="color:#d97706;">TERLAMBAT</th>
+                <th style="color:#2563eb;">IZIN</th>
+                <th style="color:#dc2626;">SAKIT</th>
+                <th style="color:#991b1b;">TANPA KETERANGAN</th>
+                <th>TOTAL HARI</th>
+                <th>RIWAYAT HARIAN & KETERANGAN</th>
+                <th>FOTO TERAKHIR</th>
+                <th style="text-align:center;">AKSI & DETAIL</th>
+              </tr>
+            </thead>
+            <tbody id="lapSummaryTableBody">
+              <tr><td colspan="13" class="empty">Memuat data rekap absensi...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- BLOK TANDA TANGAN FORMAL DOKUMEN CETAK -->
+        <div class="print-signature-section" id="printSignatureSection">
+          <div class="print-sign-box">
+            <div class="print-sign-title">Dibuat Oleh,</div>
+            <div class="print-sign-space"></div>
+            <div class="print-sign-name" id="printSignName1">Branch Manager / Petugas</div>
+            <div class="print-sign-role" id="printSignRole1">Kepala Cabang / PIC Point</div>
+          </div>
+          <div class="print-sign-box">
+            <div class="print-sign-title">Mengetahui & Menyetujui,</div>
+            <div class="print-sign-space"></div>
+            <div class="print-sign-name" id="printSignName2">Area Manager / Regional Manager</div>
+            <div class="print-sign-role" id="printSignRole2">Regional Gorontalo</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LIVE SATELLITE TRACKING 24 JAM -->
+      <div id="trackingMapBox" class="map-3d-view" style="display:none; background:var(--bg-card); border:1px solid var(--border-color); border-radius:16px; padding:20px; margin-top:20px;">
+         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+             <div style="font-weight:850; font-size:16px;">Lokasi Terakhir & Jejak Pergerakan BP (Google Hybrid Satelit 24 Jam Penuh)</div>
+             <div style="display:flex; gap:10px; font-size:10px; font-weight:700;">
+                 <span style="display:flex; align-items:center; gap:4px;"><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:50%;"></span>Aktif (<span id="countAktif">0</span>)</span>
+                 <span style="display:flex; align-items:center; gap:4px;"><span style="display:inline-block;width:10px;height:10px;background:#eab308;border-radius:50%;"></span>Delay (<span id="countDelay">0</span>)</span>
+                 <span style="display:flex; align-items:center; gap:4px;"><span style="display:inline-block;width:10px;height:10px;background:#ef4444;border-radius:50%;"></span>Offline (<span id="countOffline">0</span>)</span>
+             </div>
+         </div>
+         <div style="display:flex; gap:10px; margin-bottom:15px; align-items:center; flex-wrap:wrap;">
+             <select id="trackingBpSelect" style="max-width:300px; height:38px; font-size:12px; font-weight:700; border:1px solid #1d4ed8; color:#1d4ed8; background:#eff6ff;" onchange="window.filterTrackingMap()">
+                <option value="all">🌐 Tampilkan Semua BP</option>
+             </select>
+             <button class="refresh" style="background:#1d4ed8; color:white; border:none;" onclick="window.loadTrackingData()"><span style="font-size:12px;">↻</span> Refresh Maps</button>
+             <button type="button" class="btn-3d-toggle active" id="btnToggle3D" onclick="window.toggle3DMap()">
+               <span>🧊</span> <span>Tampilan 3D Aktif</span>
+             </button>
+             <button type="button" class="btn-3d-toggle" id="btnToggleMapLayer" onclick="window.toggleMapLayerType()">
+               <span>🛰️</span> <span id="mapLayerLabel">Mode Satelit Google</span>
+             </button>
+         </div>
+         <div id="mapContainer" style="width:100%; height:500px; border-radius:12px; border:1px solid var(--border-color); z-index:1;"></div>
+      </div>
+
+      <!-- STATISTIK KARTU METRIK DASHBOARD (12 HIGHLIGHT CARDS) -->
+      <div class="stats" id="stats"></div>
+
+      <!-- HIGHLIGHT CARD BESAR KHUSUS TOTAL SKOR KPI & METERAN VISUAL (ZETTBOT FEATURE 2) -->
+      <div class="kpi-score-hero-container" id="kpiScoreHeroContainer">
+        <div class="kpi-score-hero-card">
+          <div class="kpi-score-hero-header">
+            <div class="kpi-score-hero-title">
+              <span>🎯</span> <span id="kpiHeroTitle">TOTAL SKOR KPI PERFORMANCE</span>
+            </div>
+            <span class="kpi-status-badge achieve-expectation" id="kpiHeroBadge">
+              <span id="kpiHeroBadgeIcon">✓</span> <span id="kpiHeroBadgeText">Achieve Expectation</span>
+            </span>
+          </div>
+          <div class="kpi-score-hero-main">
+            <div class="kpi-score-hero-val" id="kpiHeroScoreVal">0.0%</div>
+            <div class="kpi-score-hero-desc" id="kpiHeroDesc">
+              Total akumulasi skor seluruh parameter tertimbang sesuai bobot KPI resmi.
+            </div>
+          </div>
+          <div class="kpi-meter-wrapper">
+            <div class="kpi-meter-track">
+              <div class="kpi-meter-bar achieve-expectation" id="kpiHeroMeterBar" style="width: 0%;"></div>
+            </div>
+            <div class="kpi-meter-scale">
+              <span>0%</span>
+              <span>80% (Need Improvement)</span>
+              <span>100% (Achieve Expectation)</span>
+              <span>120%+ (Exceed Expectation)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- METRIK POST DISB (TERISOLASI MURNI DI MENU POST DISB SAJA) -->
+      <div id="postDisbMetricsContainer" class="stats" style="display:none; margin-top:20px;">
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#dcfce7; color:#15803d;">✓</div>
+          <div class="stat-label">Sudah Diverifikasi</div>
+          <div class="stat-value" id="pdMetricVerifiedPct">0.0%</div>
+          <div class="stat-note" id="pdMetricVerifiedCount">0 Mitra Terverifikasi</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#f1f5f9; color:#475569;">⏳</div>
+          <div class="stat-label">Belum Diverifikasi</div>
+          <div class="stat-value" id="pdMetricUnverifiedPct">0.0%</div>
+          <div class="stat-note" id="pdMetricUnverifiedCount">0 Mitra Belum Post Disb</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#fef3c7; color:#b45309;">📴</div>
+          <div class="stat-label">Tidak Direspon</div>
+          <div class="stat-value" id="pdMetricNoResponsePct">0.0%</div>
+          <div class="stat-note" id="pdMetricNoResponseCount">0 Mitra Tidak Merespon</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:#fee2e2; color:#b91c1c;">📵</div>
+          <div class="stat-label">Tidak Bisa Dihubungi</div>
+          <div class="stat-value" id="pdMetricUnreachablePct">0.0%</div>
+          <div class="stat-note" id="pdMetricUnreachableCount">0 Mitra Nomor Tidak Aktif</div>
+        </div>
+      </div>
+
+      <!-- PERFORMA KP PER WEEK (SEDERHANA BERDASARKAN TABEL MINGGUAN & DEFISIT GD) -->
+      <div class="performa-kp-week-box" id="performaKpWeekBox" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+          <div>
+            <div style="font-weight:850; font-size:16px; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+              <span>📈</span> <span>Performa KP Per Week (Day-to-Day Analysis)</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              Analisis mingguan (W1, W2, W3, W4) dan Day-to-Day (Senin vs Senin, dst.) per Area, Point, dan BP mencakup Sudah Cair, Menunggu, dan analisa defisit penurunan Gagal Cair (Deduplikasi Customer Number 1x).
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="refresh" style="height:32px; padding:0 12px; font-size:11px; background:#059669; color:white; border:none;" onclick="window.loadPerformaKpPerWeek(true)">↻ Refresh Analisis</button>
+          </div>
+        </div>
+
+        <!-- KARTU ANALISA DEFISIT GAGAL CAIR -->
+        <div class="gagal-cair-analysis-box" id="gagalCairAnalysisBox" style="display:none;">
+          <div>
+            <div class="gagal-cair-title">Potensi Plafond Riil (Tanpa Drop)</div>
+            <div class="gagal-cair-val" id="gcValPotensi">Rp 0</div>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Target potensi sebelum terpotong gagal cair</div>
+          </div>
+          <div>
+            <div class="gagal-cair-title">Defisit Terkurang Gagal Cair</div>
+            <div class="gagal-cair-val" id="gcValDefisit" style="color:#b91c1c;">- Rp 0</div>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:2px;" id="gcValPersenDefisit">Terkurang 0.0% dari potensi</div>
+          </div>
+          <div>
+            <div class="gagal-cair-title">Actual Plafond Berhasil Cair</div>
+            <div class="gagal-cair-val" id="gcValActual" style="color:#15803d;">Rp 0</div>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:2px;" id="gcValPersenActual">Pencapaian 0.0%</div>
+          </div>
+        </div>
+
+        <div class="kp-week-tabs-nav">
+          <button type="button" class="kp-week-tab-btn active" id="tabKpWeekArea" onclick="window.switchKpWeekLevel('Area')">🏢 Level Area</button>
+          <button type="button" class="kp-week-tab-btn" id="tabKpWeekPoint" onclick="window.switchKpWeekLevel('Point')">📍 Level Point</button>
+          <button type="button" class="kp-week-tab-btn" id="tabKpWeekBP" onclick="window.switchKpWeekLevel('BP')">👤 Level BP</button>
+        </div>
+
+        <div class="kp-week-days-nav" id="kpWeekDayFilterContainer">
+          <span style="font-size:10px; font-weight:800; color:var(--text-muted); margin-right:4px;">PILIH HARI KOMPARASI:</span>
+          <button type="button" class="kp-week-day-btn active" data-day="all" onclick="window.filterKpWeekDay('all')">📅 Semua Hari (Total)</button>
+          <button type="button" class="kp-week-day-btn" data-day="Senin" onclick="window.filterKpWeekDay('Senin')"><span class="today-dot" id="dotTodaySenin" style="display:none;"></span> Senin</button>
+          <button type="button" class="kp-week-day-btn" data-day="Selasa" onclick="window.filterKpWeekDay('Selasa')"><span class="today-dot" id="dotTodaySelasa" style="display:none;"></span> Selasa</button>
+          <button type="button" class="kp-week-day-btn" data-day="Rabu" onclick="window.filterKpWeekDay('Rabu')"><span class="today-dot" id="dotTodayRabu" style="display:none;"></span> Rabu</button>
+          <button type="button" class="kp-week-day-btn" data-day="Kamis" onclick="window.filterKpWeekDay('Kamis')"><span class="today-dot" id="dotTodayKamis" style="display:none;"></span> Kamis</button>
+          <button type="button" class="kp-week-day-btn" data-day="Jumat" onclick="window.filterKpWeekDay('Jumat')"><span class="today-dot" id="dotTodayJumat" style="display:none;"></span> Jumat</button>
+          <button type="button" class="kp-week-day-btn" data-day="Sabtu" onclick="window.filterKpWeekDay('Sabtu')"><span class="today-dot" id="dotTodaySabtu" style="display:none;"></span> Sabtu</button>
+        </div>
+
+        <div class="table-scroll" id="kpWeekTableContainer">
+          <table>
+            <thead id="kpWeekTableHead"></thead>
+            <tbody id="kpWeekTableBody">
+              <tr><td colspan="15" class="empty">Memuat data performa KP mingguan...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PERFORMA PENCAPAIAN BOX -->
+      <div class="performa-pencapaian-box" id="performaPencapaianBox" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+          <div>
+            <div style="font-weight:850; font-size:16px; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+              <span>🏆</span> <span>Review Performa Pencapaian Regional</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              Top 5 & Bottom 5 Point Cabang serta Top 10 & Bottom 10 Petugas BP (Berdasarkan % Achievement Total & Ranking)
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" class="card-collapse-btn" id="btnCollapsePerformaPencapaian" onclick="window.togglePerformaPencapaianCollapse()">[-] Ciutkan</button>
+            <button class="refresh" style="height:32px; padding:0 12px; font-size:11px; background:#1d4ed8; color:white; border:none;" onclick="window.loadPerformaPencapaian(true)">↻ Refresh Performa</button>
+          </div>
+        </div>
+
+        <div id="performaPencapaianContent" class="performa-pencapaian-grid">
+          <div class="performa-card">
+            <div class="performa-card-header top-point">
+              <span>📍 TOP 5 PENCAPAIAN POINT</span>
+              <span class="badge-pill success">Tertinggi</span>
+            </div>
+            <div class="table-scroll">
+              <table class="table-compact">
+                <thead>
+                  <tr>
+                    <th>RANK</th>
+                    <th>POINT</th>
+                    <th>AREA</th>
+                    <th>ACTUAL DISB</th>
+                    <th style="color:#15803d;">% ACH TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody id="top5PointTableBody">
+                  <tr><td colspan="5" class="empty">Memuat data Top 5 Point...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="performa-card-header bottom-point" style="margin-top:20px;">
+              <span>📍 BOTTOM 5 PENCAPAIAN POINT</span>
+              <span class="badge-pill danger">Perlu Evaluasi</span>
+            </div>
+            <div class="table-scroll">
+              <table class="table-compact">
+                <thead>
+                  <tr>
+                    <th>RANK</th>
+                    <th>POINT</th>
+                    <th>AREA</th>
+                    <th>ACTUAL DISB</th>
+                    <th style="color:#b91c1c;">% ACH TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody id="bottom5PointTableBody">
+                  <tr><td colspan="5" class="empty">Memuat data Bottom 5 Point...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="performa-card">
+            <div class="performa-card-header top-bp">
+              <span>👤 TOP 10 PENCAPAIAN BP</span>
+              <span class="badge-pill success">Best Performer</span>
+            </div>
+            <div class="table-scroll">
+              <table class="table-compact">
+                <thead>
+                  <tr>
+                    <th>RANK</th>
+                    <th>NAMA BP</th>
+                    <th>POINT</th>
+                    <th>AREA</th>
+                    <th style="color:#15803d;">% ACH TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody id="top10BpTableBody">
+                  <tr><td colspan="5" class="empty">Memuat data Top 10 BP...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="performa-card-header bottom-bp" style="margin-top:20px;">
+              <span>👤 BOTTOM 10 PENCAPAIAN BP</span>
+              <span class="badge-pill danger">Perlu Pendampingan</span>
+            </div>
+            <div class="table-scroll">
+              <table class="table-compact">
+                <thead>
+                  <tr>
+                    <th>RANK</th>
+                    <th>NAMA BP</th>
+                    <th>POINT</th>
+                    <th>AREA</th>
+                    <th style="color:#b91c1c;">% ACH TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody id="bottom10BpTableBody">
+                  <tr><td colspan="5" class="empty">Memuat data Bottom 10 BP...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VISUAL CHART BOX -->
+      <div class="visual-chart-box" id="visualChartBox" style="display:none;">
+        <div id="dashboardChartsArea" style="display:none;">
+          <div class="chart-header">
+            <div>
+              <div style="font-weight:850;font-size:15px;color:var(--text-main);">Komposisi Aktivitas Lapangan</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Perbandingan total kunjungan berdasarkan filter</div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="export-btn" style="background:#16a34a;" onclick="window.exportToCSV()">📥 Ekspor Data (CSV)</button>
+              <button class="export-btn" onclick="window.exportChartToPNG()">📷 Ekspor Grafik (PNG)</button>
+            </div>
+          </div>
+          <div style="height:320px;position:relative;width:100%;display:flex;justify-content:center;align-items:center;">
+            <canvas id="donutAktivitasCanvas"></canvas>
+          </div>
+
+          <div style="margin-top:28px; border-top:1px solid var(--border-color); padding-top:20px;">
+            <div class="chart-header">
+              <div>
+                <div style="font-weight:850;font-size:15px;color:var(--text-main);">Trend Analisa Inputan (7 Hari Terakhir)</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Grafik pergerakan jumlah inputan harian regional</div>
+              </div>
+            </div>
+            <div style="height:300px;position:relative;width:100%; display:flex; justify-content:center; align-items:center;">
+              <canvas id="trendCanvas"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div id="pencapaianChartArea" style="display:none;">
+          <div class="chart-header">
+            <div>
+              <div style="font-weight:850;font-size:15px;color:var(--text-main);">Diagram Bulat Pencapaian vs Target</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Rasio perbandingan Total Target vs Actual Pencapaian (Hijau & Biru Solid)</div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="export-btn" style="background:#16a34a;" onclick="window.exportToCSV()">📥 Ekspor Data (CSV)</button>
+              <button class="export-btn" onclick="window.exportChartToPNG()">📷 Ekspor Grafik (PNG)</button>
+            </div>
+          </div>
+          <div style="height:320px;position:relative;width:100%;display:flex;justify-content:center;align-items:center;">
+            <canvas id="pencapaianDonutCanvas"></canvas>
+          </div>
+          <div class="pencapaian-metric-summary" id="pencapaianSummaryCards">
+            <div class="pencapaian-metric-card">
+              <div class="pencapaian-metric-label">TOTAL TARGET</div>
+              <div class="pencapaian-metric-val-target" id="penCardTarget">Rp 0</div>
+            </div>
+            <div class="pencapaian-metric-card">
+              <div class="pencapaian-metric-label">TOTAL ACTUAL</div>
+              <div class="pencapaian-metric-val-actual" id="penCardActual">Rp 0</div>
+            </div>
+            <div class="pencapaian-metric-card">
+              <div class="pencapaian-metric-label">PERSENTASE ACHIEVED</div>
+              <div class="pencapaian-metric-val-percent" id="penCardPercent">0.0%</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="kpiChartArea" style="display:none;">
+          <div class="chart-header">
+            <div>
+              <div style="font-weight:850;font-size:15px;color:var(--text-main);" id="kpiChartTitle">Grafik Performa Skor KPI</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Rincian Skor Performance KPI Karyawan (Kombinasi Bar Multi-Parameter & Line Total Skor %)</div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="export-btn" style="background:#16a34a;" onclick="window.exportToCSV()">📥 Ekspor Data (CSV)</button>
+              <button class="export-btn" onclick="window.exportChartToPNG()">📷 Ekspor Grafik (PNG)</button>
+            </div>
+          </div>
+          <div style="height:340px;position:relative;width:100%;display:flex;justify-content:center;align-items:center;">
+            <canvas id="kpiBarCanvas"></canvas>
+          </div>
+          <div style="margin-top:22px; border-top:1px solid var(--border-color); padding-top:16px;">
+            <div class="kpi-summary-alert-title">
+              <span>▲</span> <span>Diagram Summary Parameter KPI Belum Terpenuhi</span>
+            </div>
+            <div class="kpi-summary-grid" id="kpiSummaryGrid">
+              <div class="kpi-summary-card">
+                <div class="kpi-summary-title">NTB DISBURSEMENT NOA</div>
+                <div class="kpi-summary-val" id="kpiCardNtb">0 Personil</div>
+              </div>
+              <div class="kpi-summary-card">
+                <div class="kpi-summary-title">ETB DISBURSEMENT NOA</div>
+                <div class="kpi-summary-val" id="kpiCardEtb">0 Personil</div>
+              </div>
+              <div class="kpi-summary-card">
+                <div class="kpi-summary-title">% REPAYMENT RATE DPD 1-30</div>
+                <div class="kpi-summary-val" id="kpiCard130">0 Personil</div>
+              </div>
+              <div class="kpi-summary-card">
+                <div class="kpi-summary-title">% REPAYMENT RATE DPD 31-60</div>
+                <div class="kpi-summary-val" id="kpiCard3160">0 Personil</div>
+              </div>
+              <div class="kpi-summary-card">
+                <div class="kpi-summary-title">% REPAYMENT RATE DPD 61-90</div>
+                <div class="kpi-summary-val" id="kpiCard6190">0 Personil</div>
+              </div>
+              <div class="kpi-summary-card">
+                <div class="kpi-summary-title">% REPAYMENT RATE DPD 0</div>
+                <div class="kpi-summary-val" id="kpiCardDpd0">0 Personil</div>
+              </div>
+              <div class="kpi-summary-card">
+                <div class="kpi-summary-title">SEMUA PARAMETER BELUM TERCAPAI</div>
+                <div class="kpi-summary-val" id="kpiCardAll">0 Personil</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TABEL SUMMARY PER POINT SPESIFIK SESUAI INPUTAN MENU -->
+      <div class="summary-point-table-box" id="summaryPointTableBox" style="display:none;">
+        <div class="summary-point-header">
+          <div>
+            <div class="summary-point-title" id="summaryPointTitle">
+              <span>📊</span> <span id="summaryPointTitleText">Summary Data per Point Cabang</span>
+            </div>
+            <div class="summary-point-sub" id="summaryPointSubText">Rekapitulasi data akumulasi per point (Klik nama point untuk memfilter data tabel utama)</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="font-size:11px; font-weight:800; color:#1d4ed8;" id="summaryPointCount">0 Point Terdeteksi</div>
+            <button type="button" class="card-collapse-btn" id="btnCollapsePointSummary" onclick="window.togglePointSummaryCollapse()">[-] Ciutkan</button>
+          </div>
+        </div>
+        <div class="table-scroll" id="summaryPointTableContainer">
+          <table>
+            <thead id="summaryPointTableHead"></thead>
+            <tbody id="summaryPointTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- BP SUMMARY BOX EKSISTING -->
+      <div class="bp-summary-box" id="bpSummaryBox" style="display:none;">
+        <div class="bp-summary-header">
+          <div>
+            <div style="font-weight:850;font-size:14px;">Summary Inputan Per BP</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Akumulasi total inputan/visit per petugas BP/BM (Fuzzy Match 90%)</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="font-size:11px;font-weight:800;color:#1d4ed8;" id="bpSummaryCount">0 BP Terdeteksi</div>
+            <button type="button" class="card-collapse-btn" id="btnCollapseBpSummary" onclick="window.toggleBpSummaryCollapse()">[-] Ciutkan</button>
+          </div>
+        </div>
+        <div class="table-scroll" id="bpSummaryTableContainer">
+          <table>
+            <thead>
+              <tr>
+                <th>NAMA BP / BM</th>
+                <th>POINT</th>
+                <th>AREA</th>
+                <th>TOTAL INPUTAN / VISIT</th>
+              </tr>
+            </thead>
+            <tbody id="bpSummaryTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- DAILY BP SUMMARY BOX (HARI BERJALAN) -->
+      <div class="daily-summary-box" id="dailyBPSummaryBox" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
+          <div>
+            <div style="font-weight:850; font-size:15px; color:var(--text-main);">📋 Summary Harian Inputan BP Lapangan</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Akumulasi status Sosialisasi, Pelayanan Majelis, Eligible/WL, DO, & Kolektabilitas (Fuzzy Match 90%)</div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <span class="badge-pill info" id="dailyBpSummaryDate">Hari Ini</span>
+            <button type="button" class="card-collapse-btn" id="btnCollapseDailySummary" onclick="window.toggleDailySummaryCollapse()">[-] Ciutkan</button>
+            <button class="refresh" style="height:32px; padding:0 10px; font-size:11px;" onclick="window.loadDailyBPSummary(true)">↻ Refresh Summary</button>
+          </div>
+        </div>
+        <div class="table-scroll" id="dailySummaryTableContainer">
+          <table>
+            <thead>
+              <tr>
+                <th>NAMA BP</th>
+                <th>POINT</th>
+                <th>AREA</th>
+                <th>SOSIALISASI (AMAN / PALSU)</th>
+                <th>PELAYANAN (D2D / KUMPUL / SEMI)</th>
+                <th>ELIGIBLE (WL) MINAT / TDK</th>
+                <th>DO MINAT / TDK</th>
+                <th>KOLEK / PENAGIHAN</th>
+              </tr>
+            </thead>
+            <tbody id="dailyBpSummaryTableBody">
+              <tr><td colspan="8" class="empty">Memuat ringkasan harian BP...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- APPROVAL MATRIX BOX -->
+      <div class="matrix-box" id="approvalMatrixBox" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+          <div>
+            <div style="font-weight:850; font-size:15px; color:var(--text-main);">📊 Matriks Approval Mitra Harian (ZONK, UK 1, UK ≥ 2)</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Hari kerja Senin s/d Sabtu murni dalam bulan berjalan (Customer Number Unik, Total Plafond, Rata-rata UK/BP & Rata-rata Plafond/BP dibagi hari berjalan)</div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <select id="matrixMonthSelect" class="month-select-pill" onchange="window.onMatrixMonthChange(this.value)">
+              <option value="">Memuat Bulan...</option>
+            </select>
+            <select id="matrixWeekSelect" class="week-select-pill" onchange="window.onMatrixWeekChange(this.value)">
+              <option value="0">Memuat Minggu...</option>
+            </select>
+            
+            <span id="badgeFilterZonk" class="matrix-badge-zonk matrix-badge-filter" onclick="window.filterMatrixStatus('zonk')">🔴 ZONK (0 UK)</span>
+            <span id="badgeFilterUk1" class="matrix-badge-uk1 matrix-badge-filter" onclick="window.filterMatrixStatus('uk1')">🟡 UK 1 (1 UK)</span>
+            <span id="badgeFilterUk2" class="matrix-badge-uk2 matrix-badge-filter" onclick="window.filterMatrixStatus('uk2')">🟢 UK ≥ 2 (2+ UK)</span>
+            <button type="button" id="btnResetMatrixFilter" class="matrix-badge-reset" style="display:none;" onclick="window.filterMatrixStatus('all')">↺ Tampilkan Semua</button>
+
+            <button type="button" class="card-collapse-btn" id="btnCollapseApprovalMatrix" onclick="window.toggleApprovalMatrixCollapse()">[-] Ciutkan</button>
+            <button class="refresh" style="height:32px; padding:0 10px; font-size:11px;" onclick="window.loadApprovalMatrix(true)">↻ Refresh Matriks</button>
+          </div>
+        </div>
+        <div class="table-scroll" id="approvalMatrixTableContainer">
+          <table>
+            <thead id="approvalMatrixHead"></thead>
+            <tbody id="approvalMatrixBody">
+              <tr><td colspan="15" class="empty">Memuat matriks approval harian...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- FILTER BOX UNIVERSAL -->
+      <div class="filter-box" id="filterBox">
+        <div class="filter-title" data-i18n="filter_title">Filter Data & Tampilan</div>
+        <div class="filters">
+          <div>
+            <label data-i18n="filter_search_lbl">Pencarian</label>
+            <input id="search" type="text" placeholder="Cari nama, point..." oninput="window.applyFilter()">
+          </div>
+          <div>
+            <label data-i18n="filter_bp_lbl">Nama BP/BM</label>
+            <select id="filterBP" onchange="window.applyFilter()"><option value="">Semua BP/BM</option></select>
+          </div>
+          <div>
+            <label data-i18n="filter_point_lbl">Point</label>
+            <select id="filterPoint" onchange="window.applyFilter()"><option value="">Semua Point</option></select>
+          </div>
+          <div>
+            <label data-i18n="filter_area_lbl">Area</label>
+            <select id="filterArea" onchange="window.applyFilter()"><option value="">Semua Area</option></select>
+          </div>
+
+          <div id="filterDateFromCol">
+            <label data-i18n="filter_date_from_lbl">Dari Tanggal (Single Date)</label>
+            <input id="dateFrom" type="date" onchange="window.applyFilter()">
+          </div>
+          <div id="filterDateToCol">
+            <label data-i18n="filter_date_to_lbl">Sampai Tanggal (Opsional)</label>
+            <input id="dateTo" type="date" onchange="window.applyFilter()">
+          </div>
+          <button class="reset-btn" onclick="window.resetFilter()" data-i18n="reset_btn">Reset</button>
+
+          <!-- LABEL VISUAL FILTER TANGGAL TUNGGAL -->
+          <div id="singleDateBadgeWrapper" style="grid-column: 1 / -1; display: none; margin-top: 4px;">
+            <div id="singleDateFilterBadge" style="display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:750; color:#0284c7; background:#e0f2fe; border:1px solid #bae6fd; padding:4px 12px; border-radius:8px;">
+              <span>📅</span> <span>Menampilkan data khusus tanggal: <strong id="singleDateFilterText" style="color:#0369a1;">-</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="gd-toolbar-container" id="monitoringGdToolbarExtra" style="display:none;">
+          <div class="gd-quick-filter-group">
+            <span style="font-size:10px; font-weight:800; color:var(--text-muted); margin-right:4px;">QUICK FILTER:</span>
+            <button type="button" id="btnGdFilterAll" class="btn-quick-filter-gd active-all" onclick="window.setGdQuickFilter('all')">🌐 Semua</button>
+            <button type="button" id="btnGdFilterGD1" class="btn-quick-filter-gd" onclick="window.setGdQuickFilter('gd1')">📦 GD 1</button>
+            <button type="button" id="btnGdFilterGD2" class="btn-quick-filter-gd" onclick="window.setGdQuickFilter('gd2')">📦 GD 2</button>
+            <button type="button" id="btnGdFilterPending" class="btn-quick-filter-gd" onclick="window.setGdQuickFilter('pending')">⏳ Pending</button>
+            <button type="button" id="btnGdFilterDropout" class="btn-quick-filter-gd" onclick="window.setGdQuickFilter('dropout')">🚫 Dropout</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label style="margin:0; font-size:10px; font-weight:800; color:var(--text-muted);">FILTER WEEK:</label>
+            <select id="gdWeekFilterSelect" class="gd-week-filter-select" onchange="window.onGdWeekFilterChange(this.value)">
+              <option value="">Semua Week</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- STATUS VALIDASI CEPAT DENGAN COUNTER REAL-TIME -->
+        <div class="approval-filters-extra" id="approvalFiltersExtra">
+          <div>
+            <label>PRODUCT TYPE</label>
+            <select id="filterProductType" onchange="window.applyFilter()">
+              <option value="">Semua Product Type</option>
+              <option value="modal">Modal</option>
+              <option value="group loan">Group Loan</option>
+            </select>
+          </div>
+          <div>
+            <label>KATEGORI CYCLE</label>
+            <select id="filterKategoriCycle" onchange="window.applyFilter()">
+              <option value="">Semua Kategori Cycle</option>
+              <option value="new">New Mitra</option>
+              <option value="subsequent">Subsequent Mitra</option>
+            </select>
+          </div>
+          <div>
+            <label>TANGGAL APPROVE UK</label>
+            <div style="display:flex; gap:4px;">
+              <input id="dateFromApprove" type="date" title="Dari Tanggal Approve" onchange="window.applyFilter()" />
+              <input id="dateToApprove" type="date" title="Sampai Tanggal Approve" onchange="window.applyFilter()" />
+            </div>
+          </div>
+          <div>
+            <label>TANGGAL DISBURSEMENT</label>
+            <div style="display:flex; gap:4px;">
+              <input id="dateFromDisb" type="date" title="Dari Tanggal Disb" onchange="window.applyFilter()" />
+              <input id="dateToDisb" type="date" title="Sampai Tanggal Disb" onchange="window.applyFilter()" />
+            </div>
+          </div>
+          <div>
+            <label>DISBURSE DATE HARI INI</label>
+            <button type="button" id="btnDisbToday" class="btn-toggle-disb-today" onclick="window.toggleDisburseTodayFilter()">
+              <span>📅</span> <span>Disburse Hari Ini</span>
+            </button>
+          </div>
+          <div>
+            <label>STATUS VALIDASI CEPAT</label>
+            <div class="btn-toggle-val-group">
+              <button type="button" id="btnValAll" class="btn-toggle-val active-all" onclick="window.setValidationQuickFilter('all')">⚪ Semua (<span id="valAllCount">0</span>)</button>
+              <button type="button" id="btnValSudah" class="btn-toggle-val" onclick="window.setValidationQuickFilter('sudah')">🟢 Sudah Validasi (<span id="valSudahCount">0</span>)</button>
+              <button type="button" id="btnValBelum" class="btn-toggle-val" onclick="window.setValidationQuickFilter('belum')">🔴 Belum Validasi (<span id="valBelumCount">0</span>)</button>
+              <button type="button" id="btnValGagal" class="btn-toggle-val" onclick="window.setValidationQuickFilter('gagal')">🚫 Tidak Perlu Validasi (Gagal Cair) (<span id="valGagalCount">0</span>)</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="approval-filters-extra" id="postDisbFiltersExtra" style="display:none;">
+          <div>
+            <label>STATUS POST DISB</label>
+            <select id="filterPostDisbStatus" onchange="window.applyFilter()">
+              <option value="">Semua Status Post Disb</option>
+              <option value="belum">⚪ Belum Post Disb</option>
+              <option value="sudah">🟢 Sudah Post Disb</option>
+              <option value="tidak direspon">🟡 Tidak Direspon</option>
+              <option value="tidak bisa dihubungi">🔴 Tidak Bisa Dihubungi</option>
+            </select>
+          </div>
+          <div>
+            <label>PRODUCT TYPE</label>
+            <select id="filterPostDisbProduct" onchange="window.applyFilter()">
+              <option value="">Semua Product Type</option>
+              <option value="modal">Modal</option>
+              <option value="group loan">Group Loan</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- BAHAN KUNJUNGAN TOOLBAR & AUDIT TRAIL CONTAINER -->
+      <div id="bahanKunjunganExtraBox" style="display:none; margin-top:20px;">
+        <div class="audit-trail-banner" id="auditTrailBanner" style="display:none;">
+          <div class="audit-trail-text">
+            <span>ℹ️</span> <span>Terakhir Diperbarui Oleh: <strong id="auditUploaderInfo">-</strong></span>
+          </div>
+          <div class="audit-trail-badge" id="auditTimestampBadge">- WITA</div>
+        </div>
+
+        <!-- UPLOAD ZONE DRAG & DROP FILE EXCEL / WPS / CSV -->
+        <div class="upload-zone-box" id="uploadBahanKunjunganBox" style="display:none;" ondragover="window.handleDragOver(event)" ondragleave="window.handleDragLeave(event)" ondrop="window.handleFileDrop(event)">
+          <div class="upload-drop-icon">📤</div>
+          <div class="upload-drop-title" id="uploadBahanKunjunganTitle">Unggah Berkas Master Leads (Excel / WPS / CSV)</div>
+          <div class="upload-drop-sub">Drag & drop berkas ke sini atau klik tombol di bawah (.xlsx, .xls, .csv). Khusus Role 1-RM dan 2-AM. Kolom tabel akan menyesuaikan 100% dinamis dengan berkas asli.</div>
+          <input type="file" id="bahanKunjunganFileInput" accept=".csv, .xlsx, .xls" style="display:none;" onchange="window.handleBahanKunjunganFileSelected(event)" />
+          <button type="button" class="btn-upload-file" onclick="document.getElementById('bahanKunjunganFileInput').click()">
+            <span>📂</span> <span>Pilih Berkas Excel/WPS/CSV</span>
+          </button>
+          <div id="uploadBahanKunjunganFileName" style="font-size:11px; font-weight:750; color:#2563eb; margin-top:8px;"></div>
+        </div>
+
+        <div class="status-filter-shortcuts" id="statusFilterShortcuts" style="display:none;">
+          <span style="font-size:10px; font-weight:800; color:var(--text-muted); margin-right:4px;">STATUS KUNJUNGAN:</span>
+          <button type="button" class="btn-shortcut-status active" data-status="all" onclick="window.filterBahanKunjunganStatus('all')">🌐 Semua</button>
+          <button type="button" class="btn-shortcut-status" data-status="visited" onclick="window.filterBahanKunjunganStatus('visited')">🟢 Sudah Dikunjungi</button>
+          <button type="button" class="btn-shortcut-status" data-status="unvisited" onclick="window.filterBahanKunjunganStatus('unvisited')">⚪ Belum Dikunjungi</button>
+          <button type="button" class="btn-shortcut-status" data-status="minat" id="btnShortcutMinat" onclick="window.filterBahanKunjunganStatus('minat')">✓ Minat</button>
+          <button type="button" class="btn-shortcut-status" data-status="tidak_minat" id="btnShortcutTidakMinat" onclick="window.filterBahanKunjunganStatus('tidak_minat')">✕ Tidak Minat</button>
+        </div>
+      </div>
+
+      <div id="plafondWarningBanner" class="plafond-warning-banner">
+        <div>
+          <div class="plafond-warning-title">
+            <span>⚠️</span> <span id="plafondWarningTitleText">Peringatan: Terdeteksi Pengajuan Plafond &le; Rp 4.000.000</span>
+          </div>
+          <div class="plafond-warning-sub" id="plafondWarningSubText">
+            Terdapat mitra berstatus Menunggu Pencairan dengan plafond kecil (&le; 4 Juta). BM dapat membuka daftar pengajuan &lt; 3 Juta untuk dievaluasi & diajukan reject ke AM.
+          </div>
+        </div>
+        <button type="button" class="btn-open-reject-modal" onclick="window.openRejectPlafondModal()">
+          <span>🔍</span> <span>Buka Data Reject (&lt; 3 Juta)</span>
+        </button>
+      </div>
+
+      <!-- MAIN TABLE BOX -->
+      <div class="table-box" id="tableBox">
+        <!-- ZETTBOT FEATURE: BADGE FILTER AKTIF POINT -->
+        <div id="activePointFilterBadgeWrapper" style="display:none; padding: 14px 17px 0 17px;">
+          <div class="badge-active-point-filter" id="activePointFilterBadge">
+            <span>📍 Filter Aktif Point: <strong id="activePointFilterName">-</strong></span>
+            <button type="button" class="btn-reset-point-filter" onclick="window.resetPointFilter()" title="Kembali ke semua point">✕ Reset Point</button>
+          </div>
+        </div>
+
+        <div id="duplicateBanner" style="display:none; background:#fff7ed; border-bottom:1px solid #fed7aa; padding:12px 17px; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+           <div style="display:flex; align-items:center; gap:10px;">
+              <span style="font-size:18px;">⚠️</span>
+              <div>
+                 <div style="font-size:12px; font-weight:800; color:#c2410c;">Peringatan Kunjungan Ganda (Duplikat)</div>
+                 <div style="font-size:11px; color:#ea580c;" id="duplicateBannerText">Terdapat Mitra yang dikunjungi lebih dari 1 kali.</div>
+              </div>
+           </div>
+           <button id="btnFilterDuplicate" class="auth-btn" style="background:#ea580c; padding:6px 12px; font-size:11px;" onclick="window.toggleDuplicateFilter()">Lihat Data Duplikat</button>
+        </div>
+
+        <div class="table-head">
+          <div class="table-title" id="tableTitle">Data Aktivitas Detail</div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <button type="button" class="btn-download-csv" onclick="window.exportToCSV()" title="Download Excel/CSV Data">
+              <span>📥</span> <span data-i18n="download_excel_btn">Download Data (Excel/CSV)</span>
+            </button>
+            <div style="font-size:11px;color:var(--text-muted);" id="rowCount">0 data</div>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead id="tableHead"></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+
+        <div class="pagination-bar" id="paginationBar">
+          <div id="pagInfo">Menampilkan 0 data</div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;color:var(--text-muted);font-weight:700;">Tampilkan Baris:</span>
+              <select id="pageSizeSelect" style="height:32px;font-size:11px;width:110px;" onchange="window.changePageSize(this.value)">
+                <option value="10">10 Baris</option>
+                <option value="20">20 Baris</option>
+                <option value="50">50 Baris</option>
+                <option value="100">100 Baris</option>
+                <option value="all">Semua Data</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:6px;" id="pagControls"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ASISTAN AKTIVITY WIDGET -->
+<button class="assistant-widget-btn" id="assistantWidgetBtn" title="Buka AsistanAktivity">
+  🤖
+</button>
+
+<div class="assistant-modal" id="assistantModal">
+  <div class="assistant-header">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span>🤖</span>
+      <div>
+        <div>AsistanAktivity</div>
+        <div style="font-size:10px;font-weight:500;opacity:0.9;">Offline Knowledge Base Operasional Regional Gorontalo</div>
+      </div>
+    </div>
+    <button style="background:none;border:none;color:white;font-size:16px;cursor:pointer;" onclick="window.toggleAssistantModal()">✕</button>
+  </div>
+  <div class="assistant-body" id="assistantBody">
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;padding:12px;border-radius:10px;">
+      👋 Halo! Saya <strong>AsistanAktivity</strong>, asisten offline operasional Aktivitas Regional Gorontalo. Silakan tanyakan seputar link formulir, absensi, KPI, bahan kunjungan, atau operasional lapangan lainnya!
+    </div>
+  </div>
+  <div class="assistant-quick-btns">
+    <button class="assistant-chip" onclick="window.askAssistant('link')">🔗 Link Aktivitas</button>
+    <button class="assistant-chip" onclick="window.askAssistant('sosialisasi')">🌐 Link Sosialisasi</button>
+    <button class="assistant-chip" onclick="window.askAssistant('absen')">📍 Cara Absensi</button>
+    <button class="assistant-chip" onclick="window.askAssistant('postdisb')">💼 Post Disb</button>
+    <button class="assistant-chip" onclick="window.askAssistant('kpi')">📊 Ketentuan KPI</button>
+    <button class="assistant-chip" onclick="window.askAssistant('monitoring gd')">📦 Monitoring GD</button>
+    <button class="assistant-chip" onclick="window.askAssistant('performa kp week')">📈 KP Per Week</button>
+    <button class="assistant-chip" onclick="window.askAssistant('bahan kunjungan')">📂 Bahan Kunjungan</button>
+    <button class="assistant-chip" onclick="window.askAssistant('login')">🔒 Panduan Login</button>
+  </div>
+  <div style="padding:10px;background:var(--bg-card);border-top:1px solid var(--border-color);display:flex;gap:6px;">
+    <input type="text" id="assistantInput" placeholder="Tanyakan seputar sistem web app..." style="height:36px;font-size:11px;flex:1;" onkeypress="window.handleAssistantKey(event)">
+    <button style="background:#059669;color:white;border:none;padding:0 14px;border-radius:8px;font-weight:700;cursor:pointer;" onclick="window.sendAssistantQuery()">Tanya</button>
+  </div>
+</div>
+
+<!-- MODAL WA SHARE & WATERMARK -->
+<div class="large-alert-overlay" id="waShareModal">
+  <div class="large-alert-card" style="max-width:480px;">
+    <div class="large-alert-icon success" style="background:#dcfce7;color:#15803d;border:2px solid #86efac;">📱</div>
+    <div class="large-alert-title">Absensi Berhasil Disimpan!</div>
+    <div class="large-alert-msg" id="waShareMsg" style="margin-bottom:12px;">Laporan absensi Anda telah tersimpan. Silakan bagikan foto ber-watermark & laporan ke WhatsApp.</div>
+    <div style="margin-bottom:12px;border-radius:12px;overflow:hidden;border:1px solid var(--border-color);max-height:180px;background:#000;display:flex;align-items:center;justify-content:center;">
+      <img id="waModalPhotoPreview" src="" alt="Foto Watermark Absensi" style="width:100%;max-height:180px;object-fit:contain;" />
+    </div>
+    <div style="margin-bottom:14px;background:rgba(0,0,0,0.04);padding:10px;border-radius:8px;font-size:11px;text-align:left;max-height:110px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;border:1px solid var(--border-color);" id="waTextPreview"></div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <button class="large-alert-btn" style="background:#16a34a;display:flex;align-items:center;justify-content:center;gap:6px;" onclick="window.shareToWhatsappWithPhoto()">
+        📱 Bagikan Foto + Teks ke WhatsApp
+      </button>
+      <div style="display:flex;gap:8px;">
+        <button class="auth-btn" style="flex:1;background:#0f172a;padding:10px;" onclick="window.downloadWatermarkImage()">📥 Unduh Foto</button>
+        <button class="auth-btn" style="flex:1;background:#1d4ed8;padding:10px;" onclick="window.copyWaTextToClipboard()">📋 Salin Teks WA</button>
+      </div>
+      <button class="large-alert-btn" style="background:#64748b;height:40px;font-size:12px;" onclick="window.closeWaShareModal()">Tutup Modal</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- CONFIRM MODAL -->
+<div class="large-alert-overlay" id="confirmModal">
+  <div class="large-alert-card" style="max-width:420px;">
+    <div class="large-alert-icon error" id="confirmIcon" style="background:#fef3c7;color:#d97706;border-color:#fde68a;">⚠️</div>
+    <div class="large-alert-title" id="confirmTitle">Konfirmasi</div>
+    <div class="large-alert-msg" id="confirmMessage">Apakah Anda yakin ingin melanjutkan tindakan ini?</div>
+    <div style="display:flex;gap:10px;margin-top:15px;">
+      <button class="large-alert-btn" id="confirmBtnCancel" style="background:#64748b;" onclick="window.closeCustomConfirm(false)">Batal</button>
+      <button class="large-alert-btn" id="confirmBtnOk" style="background:#1d4ed8;" onclick="window.closeCustomConfirm(true)">Ya, Konfirmasi</button>
+    </div>
+  </div>
+</div>
+
+<!-- LARGE ALERT MODAL -->
+<div class="large-alert-overlay" id="largeAlertModal">
+  <div class="large-alert-card">
+    <div class="large-alert-icon success" id="alertIcon">✓</div>
+    <div class="large-alert-title" id="alertTitle">Notifikasi Sistem</div>
+    <div class="large-alert-msg" id="alertMessage">Pesan akan ditampilkan di sini</div>
+    <button class="large-alert-btn" onclick="window.closeLargeAlert()">Tutup / Lanjutkan</button>
+  </div>
+</div>
+
+<!-- CHAT WIDGET & MODAL -->
+<button class="chat-widget-btn" id="chatWidgetBtn" onclick="window.toggleChatBox()">
+  💬
+  <div class="chat-unread-badge" id="chatUnreadBadge" style="display:none;">0</div>
+</button>
+
+<div class="chat-box-modal" id="chatBoxModal">
+  <div class="chat-header">
+    <span>Global Chat Lapangan</span>
+    <button style="background:none;border:none;color:white;font-size:16px;cursor:pointer;" onclick="window.toggleChatBox()">✕</button>
+  </div>
+  <div style="padding:8px 12px;background:rgba(0,0,0,0.02);border-bottom:1px solid var(--border-color);display:flex;flex-direction:column;gap:6px;">
+    <select id="chatScopeSelect" style="width:100%;height:32px;font-size:11px;" onchange="window.handleScopeChange()">
+      <option value="all">🌐 Publik (Semua Regional)</option>
+      <option value="area">🏢 Area Saya Saja</option>
+      <option value="point">📍 Point Saya Saja</option>
+      <option value="direct">👤 BP Spesifik (Pilih BP Tujuan)</option>
+    </select>
+    <select id="chatTargetBPSelect" style="width:100%;height:32px;font-size:11px;display:none;border:1px solid #1d4ed8;background:#eff6ff;">
+      <option value="">-- Pilih BP / User Tujuan --</option>
+    </select>
+  </div>
+  <div class="chat-messages" id="chatMessages"></div>
+  <div style="padding:10px;background:var(--bg-card);border-top:1px solid var(--border-color);display:flex;gap:6px;">
+    <input type="text" id="chatInput" placeholder="Ketik pesan..." style="height:36px;font-size:11px;flex:1;" onkeypress="window.handleChatKey(event)">
+    <button style="background:#1d4ed8;color:white;border:none;padding:0 12px;border-radius:8px;font-weight:700;cursor:pointer;" onclick="window.sendChatMessage()">Kirim</button>
+  </div>
+</div>
+
+<!-- SETTINGS MODAL TERPADU -->
+<div class="large-alert-overlay" id="settingsModal">
+  <div class="settings-modal-card" style="max-height:90vh; overflow-y:auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid var(--border-color); padding-bottom:12px;">
+      <div style="font-weight:850; font-size:16px; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+        <span>⚙️</span> <span data-i18n="settings_title">Pengaturan Aplikasi</span>
+      </div>
+      <button class="modal-close" style="position:static;" onclick="window.closeSettingsModal()">✕</button>
+    </div>
+
+    <div class="settings-section">
+      <div>
+        <div class="settings-label" data-i18n="sound_label">Notifikasi Suara</div>
+        <div class="settings-desc" data-i18n="sound_desc">Bunyikan nada saat ada chat atau aktivitas pengguna baru</div>
+      </div>
+      <label class="settings-toggle-switch">
+        <input type="checkbox" id="settingSoundToggle" onchange="window.onSettingSoundToggleChange(this.checked)" />
+        <span class="settings-slider"></span>
+      </label>
+    </div>
+
+    <div class="settings-section">
+      <div>
+        <div class="settings-label">Pop-up Notifikasi Masuk</div>
+        <div class="settings-desc">Tampilkan pop-up toast di pojok layar saat ada pesan baru</div>
+      </div>
+      <label class="settings-toggle-switch">
+        <input type="checkbox" id="settingToastToggle" onchange="window.onSettingToastToggleChange(this.checked)" checked />
+        <span class="settings-slider"></span>
+      </label>
+    </div>
+
+    <div class="settings-section">
+      <div>
+        <div class="settings-label" data-i18n="theme_label">Tema Tampilan</div>
+        <div class="settings-desc" data-i18n="theme_desc">Pilih mode tampilan layar yang nyaman untuk mata</div>
+      </div>
+      <div class="settings-segmented-group">
+        <button type="button" id="themeBtnLight" class="settings-segmented-btn" onclick="window.setThemeMode('light')">☀️ Light</button>
+        <button type="button" id="themeBtnDark" class="settings-segmented-btn" onclick="window.setThemeMode('dark')">🌙 Dark</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div>
+        <div class="settings-label" data-i18n="lang_label">Bahasa (Language)</div>
+        <div class="settings-desc" data-i18n="lang_desc">Pilih bahasa pengantar antarmuka sistem web app</div>
+      </div>
+      <div class="settings-segmented-group">
+        <button type="button" id="langBtnId" class="settings-segmented-btn" onclick="window.setLanguage('id')">🇮🇩 Indonesia</button>
+        <button type="button" id="langBtnEn" class="settings-segmented-btn" onclick="window.setLanguage('en')">🇬🇧 English</button>
+      </div>
+    </div>
+
+    <div style="margin-top:16px; padding:14px; background:rgba(0,0,0,0.02); border:1px solid var(--border-color); border-radius:12px;">
+      <div style="font-size:12px; font-weight:850; color:var(--text-main); margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+        <span>📲</span> <span>Cara Pasang Web App ke Layar Utama (PWA / APK)</span>
+      </div>
+      <div style="font-size:11px; line-height:1.5; color:var(--text-muted);">
+        <div style="margin-bottom:6px;">
+          <strong style="color:#0284c7;">🤖 Android (Google Chrome):</strong><br>
+          1. Klik ikon titik tiga (⋮) di pojok kanan atas browser.<br>
+          2. Pilih <strong>"Tambahkan ke Layar Utama"</strong> atau <strong>"Instal Aplikasi"</strong>.
+        </div>
+        <div>
+          <strong style="color:#10b981;">🍎 iPhone / iOS (Safari):</strong><br>
+          1. Klik tombol <strong>Share</strong> (ikon kotak dengan panah ke atas di bilah bawah).<br>
+          2. Gulir ke bawah lalu pilih <strong>"Tambah ke Layar Utama"</strong> (<em>Add to Home Screen</em>).
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:20px; display:flex; justify-content:flex-end;">
+      <button type="button" class="auth-btn" style="background:#101828; padding:9px 20px;" onclick="window.closeSettingsModal()">
+        <span data-i18n="close_btn">Tutup Pengaturan</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL HUBUNGI MITRA -->
+<div class="large-alert-overlay" id="contactMitraModal">
+  <div class="contact-modal-card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <div style="font-weight:850; font-size:15px; color:var(--text-main);">Hubungi Mitra</div>
+      <button class="modal-close" style="position:static;" onclick="window.closeContactMitraModal()">✕</button>
+    </div>
+
+    <div style="background:rgba(0,0,0,0.03); border:1px solid var(--border-color); border-radius:12px; padding:14px; margin-bottom:16px; text-align:left;">
+      <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">NAMA MITRA</div>
+      <div style="font-size:14px; font-weight:850; color:var(--text-main); margin-top:2px;" id="contactMitraName">-</div>
+      
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px;">
+        <div>
+          <div style="font-size:9.5px; font-weight:800; color:var(--text-muted);">NOMOR TELEPON</div>
+          <div style="font-size:12px; font-weight:800; color:#1d4ed8; margin-top:1px;" id="contactMitraPhone">-</div>
+        </div>
+        <div>
+          <div style="font-size:9.5px; font-weight:800; color:var(--text-muted);">PLAFOND CAIR</div>
+          <div style="font-size:12px; font-weight:800; color:#16a34a; margin-top:1px;" id="contactMitraPlafond">-</div>
+        </div>
+      </div>
+    </div>
+
+    <button type="button" class="contact-btn-wa" onclick="window.actionContactMitraWA()">
+      <span>💬</span> <span>Kirim Pesan WhatsApp Langsung</span>
+    </button>
+    <button type="button" class="contact-btn-call" onclick="window.actionContactMitraCall()">
+      <span>📞</span> <span>Panggilan Telepon Seluler Biasa</span>
+    </button>
+  </div>
+</div>
+
+<!-- MODAL VERIFIKASI POST DISB -->
+<div class="large-alert-overlay" id="postDisbVerifyModal">
+  <div class="modal-card" style="max-width:500px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; border-bottom:1px solid var(--border-color); padding-bottom:10px;">
+      <div>
+        <div style="font-weight:850; font-size:15px; color:var(--text-main);">Verifikasi Post Disb & Konfirmasi</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Konfirmasi pencairan pembiayaan mitra lapangan</div>
+      </div>
+      <button class="modal-close" style="position:static;" onclick="window.closePostDisbVerifyModal()">✕</button>
+    </div>
+
+    <div style="background:rgba(0,0,0,0.02); border:1px solid var(--border-color); border-radius:10px; padding:12px; margin-bottom:14px; text-align:left;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:11px;">
+        <div>
+          <div style="color:var(--text-muted); font-size:10px; font-weight:700;">NAMA MITRA</div>
+          <div style="font-weight:850; color:var(--text-main);" id="pvCustName">-</div>
+        </div>
+        <div>
+          <div style="color:var(--text-muted); font-size:10px; font-weight:700;">LOAN ID / CUSTOMER NO</div>
+          <div style="font-weight:850; color:#1d4ed8;" id="pvLoanId">-</div>
+        </div>
+        <div>
+          <div style="color:var(--text-muted); font-size:10px; font-weight:700;">PLAFOND</div>
+          <div style="font-weight:850; color:#16a34a;" id="pvPlafond">-</div>
+        </div>
+        <div>
+          <div style="color:var(--text-muted); font-size:10px; font-weight:700;">TANGGAL CAIR</div>
+          <div style="font-weight:850; color:var(--text-main);" id="pvDisbDate">-</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-group">
+      <label>Pilihan Status Verifikasi <span style="color:#ef4444;">*</span></label>
+      <select id="pvStatusChoice" onchange="window.onPostDisbStatusChoiceChange(this.value)">
+        <option value="Sudah Post Disb" selected>🟢 Sudah Post Disb (Upload Bukti Sesuai Role)</option>
+        <option value="Tidak Direspon">🟡 Tidak Direspon (Upload Bukti Kontak Tidak Menjawab)</option>
+        <option value="Tidak Bisa Dihubungi">🔴 Tidak Bisa Dihubungi (Nomor Salah / Mati)</option>
+      </select>
+    </div>
+
+    <div class="modal-group" id="pvProofUploadWrapper">
+      <label id="pvUploadLabel">Lampirkan Berkas Bukti Verifikasi <span style="color:#ef4444;">*</span></label>
+      <div style="border:1.5px dashed var(--border-color); border-radius:10px; padding:12px; text-align:center; background:var(--input-bg);">
+        <input type="file" id="pvProofFile" style="font-size:11px; width:100%; cursor:pointer;" onchange="window.handleProofFileSelected(event)" />
+        <div id="pvFormatRequirementNote" style="font-size:10px; color:var(--text-muted); margin-top:6px; font-weight:650;"></div>
+      </div>
+    </div>
+
+    <div class="modal-group">
+      <label>Catatan / Keterangan Verifikasi (Opsional)</label>
+      <textarea id="pvNotesInput" rows="2" style="width:100%; border:1px solid var(--border-color); border-radius:8px; padding:8px; font-size:11px; background:var(--input-bg); color:var(--text-main); outline:none;" placeholder="Contoh: Mitra mengonfirmasi dana cair penuh / panggilan tidak terjawab..."></textarea>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-top:16px;">
+      <button type="button" class="auth-btn" style="background:#64748b; flex:1;" onclick="window.closePostDisbVerifyModal()">Batal</button>
+      <button type="button" id="btnSubmitPostDisbVerify" class="submit-btn" style="flex:2; background:#16a34a;" onclick="window.submitPostDisbVerification()">
+        <span>💾 Simpan Verifikasi</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- STREET VIEW MODAL -->
+<div class="large-alert-overlay" id="streetViewModal">
+  <div class="modal-card" style="max-width:850px; width:95%; padding:18px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:18px;">🗺️</span>
+        <div>
+          <div style="font-weight:850; font-size:14px; color:var(--text-main);" id="svModalTitle">Street View Lokasi BP</div>
+          <div style="font-size:10px; color:var(--text-muted);" id="svModalCoords">-</div>
+        </div>
+      </div>
+      <button class="modal-close" style="position:static;" onclick="window.closeStreetViewModal()">✕</button>
+    </div>
+
+    <div style="width:100%; height:450px; border-radius:10px; overflow:hidden; background:#000; position:relative; border:1px solid var(--border-color);">
+      <iframe id="streetViewIframe" src="" style="width:100%; height:100%; border:0;" allowfullscreen="" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; flex-wrap:wrap; gap:8px;">
+      <div style="font-size:10.5px; color:var(--text-muted);">*Preview Street View resmi Google Maps</div>
+      <div style="display:flex; gap:8px;">
+        <a id="btnOpenExternalStreetView" href="#" target="_blank" class="auth-btn" style="background:#1d4ed8; text-decoration:none; display:inline-flex; align-items:center; gap:5px; font-size:11px; padding:7px 14px;">
+          <span>🌐 Buka Google Maps Resmi ↗</span>
+        </a>
+        <button type="button" class="auth-btn" style="background:#64748b; font-size:11px; padding:7px 14px;" onclick="window.closeStreetViewModal()">Tutup</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- AUTH MODAL LENGKAP -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal-card">
+    <button class="modal-close" onclick="window.closeAuthModal()">✕</button>
+    
+    <div class="modal-tabs" id="authTabsHeader">
+      <button class="tab-btn active" id="tabLoginBtn" onclick="window.switchAuthTab('login')">Login</button>
+      <button class="tab-btn" id="tabRegisterBtn" onclick="window.switchAuthTab('register')">Daftar Akun</button>
+      <button class="tab-btn" id="tabForgotBtn" onclick="window.switchAuthTab('forgot')">Lupa Password</button>
+    </div>
+
+    <!-- FORM LOGIN -->
+    <form id="loginForm" onsubmit="window.handleLoginSubmit(event)">
+      <div class="modal-group">
+        <label>NIK (Nomor Induk Karyawan)</label>
+        <input type="text" id="loginNik" required placeholder="Masukkan NIK">
+      </div>
+      <div class="modal-group">
+        <label>Password</label>
+        <input type="password" id="loginPassword" required placeholder="Masukkan Password">
+      </div>
+      <button type="submit" class="submit-btn" id="btnLoginSubmit"><span>Masuk Akun</span></button>
+    </form>
+
+    <!-- FORM PENDAFTARAN SYNC MPP -->
+    <form id="registerForm" style="display:none;" onsubmit="window.handleRegisterSubmit(event)">
+      <div class="modal-group">
+        <label>NIK Karyawan (Wajib Terdaftar di Data MPP) *</label>
+        <input type="text" id="regNik" required placeholder="Contoh: 23100499">
+      </div>
+      <div class="modal-group">
+        <label>Nomor Telepon / WhatsApp Aktif *</label>
+        <input type="text" id="regPhone" required placeholder="Contoh: 081234567890">
+      </div>
+      <div class="modal-group">
+        <label>Email Terdaftar (Untuk Kode OTP) *</label>
+        <input type="email" id="regEmail" required placeholder="karyawan@amartha.com">
+      </div>
+      <div class="modal-group">
+        <label>Role Jabatan (Wajib Sesuai Data MPP) *</label>
+        <select id="regRole" required>
+          <option value="">-- Pilih Role Jabatan Sesuai MPP --</option>
+          <option value="1-RM">1-RM (Regional Manager)</option>
+          <option value="2-AM">2-AM (Area Manager)</option>
+          <option value="3-BM">3-BM (Branch Manager)</option>
+          <option value="4-BP">4-BP (Business Partner)</option>
+          <option value="5-BPR">5-BPR (BP Recovery)</option>
+          <option value="6-BP Buffer">6-BP Buffer</option>
+        </select>
+      </div>
+      <div class="modal-group">
+        <label>Password Akun Baru *</label>
+        <input type="password" id="regPassword" required placeholder="Buat Password Akun">
+      </div>
+      <button type="submit" class="submit-btn" id="btnSubmitRegister"><span>Daftarkan Akun & Verifikasi MPP</span></button>
+    </form>
+
+    <!-- FORM LUPA PASSWORD -->
+    <form id="forgotForm" style="display:none;" onsubmit="window.handleForgotSubmit(event)">
+      <div id="forgotStep1">
+        <div class="modal-group">
+          <label>NIK Karyawan Terdaftar</label>
+          <input type="text" id="forgotNik" required placeholder="Masukkan NIK Anda">
+        </div>
+        <div class="modal-group">
+          <label>Email / Nomor Telepon Akun Terdaftar</label>
+          <input type="text" id="forgotContact" required placeholder="Email atau No HP akun">
+        </div>
+        <button type="submit" class="submit-btn" id="btnSendForgotOtp"><span>Kirim Kode OTP Pemulihan</span></button>
+      </div>
+
+      <div id="forgotStep2" style="display:none; margin-top:10px;">
+        <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:12px; margin-bottom:12px; text-align:center;">
+          <div style="font-size:12px; font-weight:800; color:#1e40af;">Kode OTP 6-Digit Terkirim!</div>
+          <div style="font-size:10.5px; color:#3b82f6; margin-top:2px;">Silakan cek kotak masuk email: <strong id="forgotEmailMasked">-</strong></div>
+        </div>
+
+        <div class="modal-group">
+          <label>Masukkan 6-Digit Kode OTP</label>
+          <input type="text" id="forgotOtpCode" placeholder="Contoh: 123456" maxlength="6" style="text-align:center; font-size:18px; font-weight:900; letter-spacing:4px;">
+        </div>
+        <div class="modal-group">
+          <label>Kata Sandi Baru</label>
+          <input type="password" id="forgotNewPassword" placeholder="Masukkan password baru">
+        </div>
+        <button type="button" class="submit-btn" id="btnVerifyResetOtp" style="background:#16a34a;" onclick="window.handleVerifyResetOtp()"><span>Verifikasi OTP & Reset Password</span></button>
+      </div>
+    </form>
+
+    <!-- FORM SETTINGS & EDIT PROFIL -->
+    <form id="settingsForm" style="display:none;" onsubmit="window.handleSettingsSubmit(event)">
+      <div style="font-weight:800;font-size:14px;margin-bottom:14px;color:#1d4ed8;">Edit Profil & Pengaturan Keamanan</div>
+
+      <div class="profile-upload-section">
+        <img id="settingAvatarPreview" class="profile-upload-avatar-preview" src="" alt="Avatar" style="display:none;" />
+        <div id="settingAvatarInitial" class="user-avatar-initial" style="width:56px; height:56px; font-size:20px;">U</div>
+        <div style="flex:1;">
+          <label style="font-size:11px; font-weight:800; color:#1d4ed8; margin-bottom:4px; display:block;">Foto Profil Karyawan (Google CDN)</label>
+          <input type="file" id="profilePhotoInput" accept="image/*" style="font-size:11px; width:100%; cursor:pointer;" onchange="window.handleProfilePhotoSelect(event)" />
+          <div style="font-size:9.5px; color:var(--text-muted); margin-top:3px;">*Kompresi otomatis (~30KB), anti-blokir browser.</div>
+        </div>
+      </div>
+
+      <div class="modal-group">
+        <label>Nomor Telepon / WA</label>
+        <input type="text" id="setPhone" required placeholder="Contoh: 0812...">
+      </div>
+      <div class="modal-group">
+        <label>Email Aktif</label>
+        <input type="email" id="setEmail" required placeholder="email@domain.com">
+      </div>
+      <div class="modal-group">
+        <label>Password Saat Ini (Verifikasi Wajib) *</label>
+        <input type="password" id="setOldPassword" required placeholder="Password Saat Ini">
+      </div>
+      <div class="modal-group">
+        <label>Password Baru (Kosongkan jika tidak diubah)</label>
+        <input type="password" id="setNewPassword" placeholder="Password Baru">
+      </div>
+
+      <div class="modal-group" id="otpSection" style="display:none;background:#eff6ff;padding:12px;border-radius:10px;border:1px solid #bfdbfe;">
+        <label style="color:#1e3a8a;font-weight:800;">Masukkan 6-Digit Kode OTP Verifikasi Email</label>
+        <input type="text" id="setOtpInput" placeholder="Contoh: 123456" maxlength="6" style="border:2px solid #1d4ed8;font-weight:800;letter-spacing:3px;text-align:center;">
+        <div style="font-size:10px;color:#3b82f6;margin-top:4px;">Kode OTP telah dikirimkan ke email akun Anda.</div>
+      </div>
+
+      <button type="button" id="btnRequestOtp" class="submit-btn" style="background:#0f172a;" onclick="window.handleRequestProfileOtp()"><span>Kirim Kode OTP Verifikasi Email</span></button>
+      <button type="submit" id="btnVerifySave" class="submit-btn" style="display:none;margin-top:8px;background:#16a34a;"><span>Verifikasi OTP & Simpan Profil</span></button>
+    </form>
+  </div>
+</div>
+
+<!-- USER PROFILE POPUP MODAL -->
+<div class="large-alert-overlay" id="userProfileModal">
+  <div class="user-profile-modal-card">
+    <button class="modal-close" onclick="window.closeUserProfileModal()">✕</button>
+    <div class="user-profile-header-bg"></div>
+    <div class="user-profile-avatar-wrapper">
+      <img id="popUserAvatar" class="user-profile-big-avatar" src="" alt="Avatar" style="display:none;" />
+      <div id="popUserInitial" class="user-profile-big-initial">U</div>
+      <div class="avatar-status-badge" style="bottom:4px; right:4px; width:18px; height:18px; border-width:3px;" title="Online"></div>
+    </div>
+    <div style="font-size:16px; font-weight:850; color:var(--text-main);" id="popUserName">Nama Pengguna</div>
+    <div style="font-size:11px; font-weight:750; color:#1d4ed8; margin-top:2px;" id="popUserRole">Role Jabatan</div>
+    
+    <div class="user-profile-info-grid">
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">NIK / ID Karyawan</div>
+        <div class="user-profile-info-val" id="popUserNik">-</div>
+      </div>
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">Jenis Kelamin (Gender)</div>
+        <div class="user-profile-info-val" id="popUserGender">-</div>
+      </div>
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">Masa Kerja</div>
+        <div class="user-profile-info-val" id="popUserMasaKerja">-</div>
+      </div>
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">Status Karyawan</div>
+        <div class="user-profile-info-val" id="popUserStatusKaryawan">-</div>
+      </div>
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">Posisi / Jabatan</div>
+        <div class="user-profile-info-val" id="popUserPosisi">-</div>
+      </div>
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">Point Penempatan</div>
+        <div class="user-profile-info-val" id="popUserPoint">-</div>
+      </div>
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">Area Regional</div>
+        <div class="user-profile-info-val" id="popUserArea">-</div>
+      </div>
+      <div class="user-profile-info-item">
+        <div class="user-profile-info-label">Regional</div>
+        <div class="user-profile-info-val" id="popUserRegional">Gorontalo</div>
+      </div>
+      <div class="user-profile-info-item full-col">
+        <div class="user-profile-info-label">Status Aktivitas</div>
+        <div class="user-profile-info-val" style="color:#16a34a;" id="popUserLastActive">Aktif</div>
+      </div>
+    </div>
+
+    <button class="btn-dm-user" id="btnDmUserOnline" onclick="window.directMessageToUser()">
+      💬 Kirim Pesan Langsung (DM Chat)
+    </button>
+  </div>
+</div>
+
+<!-- ABSENSI DETAIL HISTORY MODAL -->
+<div class="large-alert-overlay" id="absensiHistoryModal">
+  <div class="history-modal-card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--border-color); padding-bottom:10px;">
+      <div>
+        <div style="font-weight:850; font-size:15px; color:var(--text-main);" id="historyModalTitle">Riwayat Presensi Personil</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Detail tanggal kehadiran, geofencing, dan bukti dokumentasi foto</div>
+      </div>
+      <button class="modal-close" style="position:static;" onclick="window.closeAbsensiHistoryModal()">✕</button>
+    </div>
+
+    <div class="table-scroll" style="max-height:360px; overflow-y:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>TANGGAL & WAKTU</th>
+            <th>STATUS</th>
+            <th>TIPE</th>
+            <th>JARAK GPS</th>
+            <th>KETERANGAN</th>
+            <th>BUKTI DOKUMENTASI FOTO</th>
+          </tr>
+        </thead>
+        <tbody id="absensiHistoryTableBody">
+          <tr><td colspan="6" class="empty">Memuat detail riwayat absensi...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:14px; display:flex; justify-content:flex-end;">
+      <button class="auth-btn" style="background:#64748b; padding:8px 18px;" onclick="window.closeAbsensiHistoryModal()">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- VISIT DETAIL MODAL UNGU (LIHAT SELENGKAPNYA) -->
+<div class="large-alert-overlay" id="visitDetailModal">
+  <div class="visit-detail-modal-card">
+    <div class="visit-detail-header">
+      <div class="visit-detail-title">Detail Catatan Hasil Visit</div>
+      <button class="visit-detail-close-btn" onclick="window.closeVisitDetailModal()">✕</button>
+    </div>
+    <div class="visit-detail-body">
+      <div class="visit-detail-grid">
+        <div class="visit-meta-item">
+          <div class="visit-meta-label">TANGGAL & WAKTU</div>
+          <div class="visit-meta-val" id="vdTanggalWaktu">-</div>
+        </div>
+        <div class="visit-meta-item">
+          <div class="visit-meta-label">PIC / PETUGAS</div>
+          <div class="visit-meta-val" id="vdPetugas">-</div>
+        </div>
+        <div class="visit-meta-item">
+          <div class="visit-meta-label">AREA & CABANG</div>
+          <div class="visit-meta-val" id="vdAreaPoint">-</div>
+        </div>
+        <div class="visit-meta-item">
+          <div class="visit-meta-label">AKTIVITAS LAPANGAN</div>
+          <div class="visit-meta-val" id="vdAktivitas">-</div>
+        </div>
+        <div class="visit-meta-item">
+          <div class="visit-meta-label">MAJELIS</div>
+          <div class="visit-meta-val" id="vdMajelis">-</div>
+        </div>
+        <div class="visit-meta-item">
+          <div class="visit-meta-label">ID LOAN & NAMA MITRA</div>
+          <div class="visit-meta-val" id="vdLoanMitra">-</div>
+        </div>
+      </div>
+
+      <div class="visit-keterangan-section-title">
+        <span>📝</span> <span>HASIL VISIT & KETERANGAN</span>
+      </div>
+      <div class="visit-keterangan-box" id="vdKeterangan">-</div>
+    </div>
+    <div class="visit-detail-footer">
+      <button type="button" class="visit-btn-photo" id="vdBtnPhoto" onclick="window.openVisitBuktiFoto()">
+        <span>📷</span> <span>Buka Bukti Kunjungan ↗</span>
+      </button>
+      <button type="button" class="visit-btn-close" onclick="window.closeVisitDetailModal()">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- UNIVERSAL PHOTO VIEWER MODAL FRAME -->
+<div class="large-alert-overlay" id="photoViewerModal" onclick="window.closePhotoViewerModal()">
+  <div class="large-alert-card" style="max-width:680px; width:95%; padding:18px; background:#0b0f19;" onclick="event.stopPropagation();">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; color:white;">
+      <div style="font-size:13px; font-weight:800;" id="photoViewerTitle">Bukti Dokumentasi Lapangan</div>
+      <button class="modal-close" style="color:white; top:12px; right:16px;" onclick="window.closePhotoViewerModal()">✕</button>
+    </div>
+    <div class="photo-container" style="width:100%; min-height:240px; max-height:480px; overflow:hidden; border-radius:10px; background:#000; display:flex; align-items:center; justify-content:center;">
+      <img id="photoViewerImg" src="" referrerpolicy="no-referrer" loading="lazy" alt="Foto Dokumentasi" style="width:100%; max-height:480px; object-fit:contain;" onerror="this.onerror=null; this.src='https://placehold.co/600x400/101828/ffffff?text=Dokumentasi+Bukti';" />
+    </div>
+    <div style="font-size:11px; color:#94a3b8; margin-top:8px; text-align:left;" id="photoViewerMeta"></div>
+    <div id="photoViewerActionsBar" style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px; flex-wrap:wrap;"></div>
+  </div>
+</div>
+
+<!-- REJECT PLAFOND MODAL -->
+<div class="large-alert-overlay" id="rejectPlafondModal">
+  <div class="reject-modal-card">
+    <div class="reject-modal-header">
+      <div>
+        <div style="font-size:16px; font-weight:850; color:#b91c1c; display:flex; align-items:center; gap:8px;">
+          <span>🚨</span> <span>Daftar Pengajuan Plafond &lt; Rp 3.000.000 (Evaluasi Reject BM)</span>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:3px;">
+          Daftar mitra berstatus Menunggu Pencairan dengan pengajuan di bawah batas minimum Rp 3.000.000 untuk diajukan reject ke AM
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button type="button" class="btn-download-reject" onclick="window.downloadRejectPlafondData()">
+          <span>📥</span> <span>Download Data Reject (CSV)</span>
+        </button>
+        <button class="modal-close" style="position:static;" onclick="window.closeRejectPlafondModal()">✕</button>
+      </div>
+    </div>
+
+    <div class="table-scroll" style="max-height:420px; overflow-y:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>REGIONAL</th>
+            <th>AREA</th>
+            <th>POINT</th>
+            <th>CUSTOMER NUMBER</th>
+            <th>LOAN ID</th>
+            <th>NAMA MITRA</th>
+            <th style="color:#b91c1c;">PLAFOND</th>
+          </tr>
+        </thead>
+        <tbody id="rejectPlafondTableBody">
+          <tr><td colspan="7" class="empty">Memuat data pengajuan...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div style="font-size:11px; color:var(--text-muted);" id="rejectPlafondCount">0 mitra terdeteksi</div>
+      <button type="button" class="auth-btn" style="background:#64748b; padding:8px 18px;" onclick="window.closeRejectPlafondModal()">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODULAR COMPONENT: JAVASCRIPT LOGIC (MURNI 5 FILE ARSITEKTUR) -->
+<?!= include('js'); ?>
 </body>
 </html>
