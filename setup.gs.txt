@@ -1,15 +1,17 @@
 /**
  * ============================================================================
- * DATABASE INITIALIZATION & MIGRATION ENGINE (V13 - MASTER SAFE MIGRATE)
+ * DATABASE INITIALIZATION & MIGRATION ENGINE (V14 - MASTER SAFE MIGRATE)
  * ============================================================================
+ * Tahap 1: setup.gs
  * 1. Safe Migrate Skema Sheet:
- *    - 'Cohort DPD 7+ Disbursement' (Data Live DPD 7+ Mitra Sesuai Sheet Asli)
- *    - 'Bahan_Kunjungan_Audit' (Log Audit Trail Pengunggah Berkas Renewal & Reactivation)
- *    - 'Renewal_Data' & 'Reactivation_Data' (Penyimpanan Berkas Unggahan Dinamis)
+ *    - 'Cohort DPD 7+ Disbursement' (Data Live DPD 7+ Mitra Sesuai Sheet Asli) - Label: WOB 6+
+ *    - 'Renewal_Data' (Penyimpanan Berkas Unggahan Dinamis) - Label: Master Leads
+ *    - Penghapusan definisi skema Reactivation sesuai instruksi revisi.
+ *    - 'Bahan_Kunjungan_Audit' (Log Audit Trail Pengunggah Berkas)
  *    - 'OTP_Sessions' (Penyimpanan Aman Token OTP Email 6-Digit)
  * 2. ZettBOT Feature 1: Zero-ID Safety Guard (isValidId_)
  *    Memblokir angka '0', '00', '-', atau null agar tidak dianggap sebagai ID valid,
- *    sehingga detektor duplikat & pencocokan data otomatis beralih ke logika nama Fuzzy.
+ *    sehingga deteksi duplikat & pencocokan data otomatis beralih ke logika nama Fuzzy.
  * 3. ZettBOT Feature 2: Normalized Numeric ID Normalizer (normalizeNumericId_)
  *    Standarisasi ID Loan & Customer Number anti-spasi, anti-kutip, dan anti-karakter khusus.
  * 4. Mempertahankan 100% Seluruh Skema Eksisting: Users, Data MPP, Hasil Inputan,
@@ -18,6 +20,46 @@
 
 var CONFIG_SETUP = {
   TIMEZONE: 'Asia/Makassar' // WITA (Gorontalo)
+};
+
+var CONFIG = {
+  TITLE: 'Aktivitas Regional Gorontalo',
+  TIMEZONE: 'Asia/Makassar',
+  CACHE_TTL: 300, // 5 Menit Caching
+  SHEETS: {
+    dashboard: { name: 'Hasil Inputan', label: 'Dashboard' },
+    kpiRM: { name: 'KPI RM', label: 'KPI RM' },
+    kpiAM: { name: 'KPI AM', label: 'KPI AM' },
+    kpiBM: { name: 'KPI BM', label: 'KPI BM' },
+    kpi: { name: 'KPI BP', label: 'KPI BP' },
+    pencapaianArea: { name: 'Pencapaian Area', label: 'Pencapaian Area' },
+    pencapaianPoint: { name: 'Pencapaian Point', label: 'Pencapaian Point' },
+    pencapaian: { name: 'Pencapaian BP', label: 'Pencapaian BP' },
+    approvalPerhari: { name: 'Aproval Perhari', label: 'KP Daily' },
+    pelayanan: { name: 'Pelayanan', label: 'Pelayanan' },
+    sosialisasi: { name: 'Sosialisasi', label: 'Sosialisasi' },
+    kunjunganWL: { name: 'Kunjungan WL', label: 'Kunjungan Eligible' },
+    kunjunganDO: { name: 'Kunjungan DO', label: 'Kunjungan DO' },
+    newPar: { name: 'Kunjungan New Par', label: 'Kunjungan New Par' },
+    dpd830: { name: 'Kunjungan Mitra DPD 8-30', label: 'Kunjungan Mitra DPD 8-30' },
+    dpd3160: { name: 'Kunjungan Mitra DPD 31-60', label: 'Kunjungan Mitra DPD 31-60' },
+    dpd6190: { name: 'Kunjungan Mitra DPD 61-90', label: 'Kunjungan Mitra DPD 61-90' },
+    wob: { name: 'Kunjungan WOB', label: 'Kunjungan WOB' },
+    validasi: { name: 'Validasi UK/Modal BM', label: 'Validasi UK/Modal BM' },
+    suprise: { name: 'Suprise Visit', label: 'Suprise Visit' },
+    absensi: { name: 'Absensi', label: 'Absensi Regional' },
+    GlobalChat: { name: 'GlobalChat', label: 'Global Chat' },
+    DataMPP: { name: 'Data MPP', label: 'Data MPP' },
+    Users: { name: 'Users', label: 'Users' },
+    postDisbLog: { name: 'Verifikasi_PostDisb', label: 'Verifikasi Post Disb' },
+    monitoringGD: { name: 'Monitoring GD', label: 'Monitoring GD' },
+    loanPaidPoint: { name: 'Loan Paid Point', label: 'Loan Paid Point' },
+    loanPaidArea: { name: 'Loan Paid Area', label: 'Loan Paid Area' },
+    loanPaidRegional: { name: 'Loan Paid Regional', label: 'Loan Paid Regional' },
+    // REVISI: Label WOB 6+ dan Master Leads (Menghilangkan Reactivation)
+    cohort7: { name: 'Cohort DPD 7+ Disbursement', label: 'WOB 6+' },
+    renewal: { name: 'Renewal_Data', label: 'Master Leads' }
+  }
 };
 
 function initDatabase() {
@@ -87,10 +129,6 @@ function initDatabase() {
         'Upload_ID', 'Customer Number', 'Loan ID', 'Nama Mitra', 'Area',
         'Point', 'Plafond', 'Data_JSON', 'Raw_Headers', 'Uploaded_At', 'Uploaded_By'
       ],
-      'Reactivation_Data': [
-        'Upload_ID', 'Customer Number', 'Loan ID', 'Nama Mitra', 'Area',
-        'Point', 'Plafond', 'Data_JSON', 'Raw_Headers', 'Uploaded_At', 'Uploaded_By'
-      ],
       'OTP_Sessions': [
         'Session_ID', 'NIK', 'Email', 'OTP_Code', 'Created_At',
         'Expires_At', 'Purpose', 'Status'
@@ -144,7 +182,7 @@ function initDatabase() {
           SpreadsheetApp.flush();
           Utilities.sleep(150);
         } else {
-          // SAFE MIGRATE: Memeriksa dan menambahkan kolom baru tanpa menghapus data
+          // SAFE MIGRATE: Memeriksa dan menambahkan kolom baru tanpa merusak data yang ada
           var lastCol = sheet.getLastColumn();
           var existingHeaders = [];
           if (lastCol > 0) {
@@ -189,8 +227,8 @@ function initDatabase() {
     setupTriggers();
 
     SpreadsheetApp.flush();
-    Logger.log('Inisialisasi & Safe Migration Database V13.1 Berhasil!');
-    return { status: 'success', message: 'Inisialisasi & Safe Migration Database V13.1 Berhasil!' };
+    Logger.log('Inisialisasi & Safe Migration Database V14 Berhasil!');
+    return { status: 'success', message: 'Inisialisasi & Safe Migration Database V14 Berhasil!' };
 
   } catch (err) {
     Logger.log('Error Kritis saat initDatabase: ' + err.toString());
@@ -294,7 +332,7 @@ function checkDatabaseHealth() {
       'Users', 'Data MPP', 'Hasil Inputan', 'Sosialisasi', 'Pelayanan', 'GlobalChat', 
       'ActiveSessions', 'Absensi', 'Master Point', 'Verifikasi_PostDisb',
       'Aproval Perhari', 'Cohort DPD 7+ Disbursement', 'Bahan_Kunjungan_Audit',
-      'Renewal_Data', 'Reactivation_Data', 'OTP_Sessions', 'KPI RM', 'KPI AM', 'KPI BM'
+      'Renewal_Data', 'OTP_Sessions', 'KPI RM', 'KPI AM', 'KPI BM'
     ];
     var missing = [];
     
@@ -305,7 +343,7 @@ function checkDatabaseHealth() {
     if (missing.length > 0) {
       return 'Peringatan: Sheet berikut belum ditemukan: ' + missing.join(', ') + '. Silakan jalankan initDatabase().';
     }
-    return 'Database Sehat V13.1: Seluruh sheet operasional, skema Bahan Kunjungan, OTP Sessions, & folder Drive siap 100%.';
+    return 'Database Sehat V14: Seluruh sheet operasional, skema Bahan Kunjungan (WOB 6+ & Master Leads), OTP Sessions, & folder Drive siap 100%.';
   } catch(e) {
     return 'Gagal mengecek kesehatan database: ' + e.message;
   }
